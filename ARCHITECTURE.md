@@ -160,6 +160,47 @@ The **trigger is a large thumb-reachable on-screen button** at the bottom corner
 opposite the reach slider, so both thumbs work simultaneously: one slides reach,
 the other paints — while the whole phone aims direction.
 
+### 3.1a Chosen brush behavior (decided)
+
+The hold-to-paint trigger is the **primary, decided** mechanic. Locked details:
+
+- **Line-fill strokes (segment supersampling).** A fast sweep can move the cursor
+  past several cells between two frames. Instead of painting only the cell under
+  the cursor each frame (which leaves gaps), walk the segment from *last frame's
+  cursor* to *this frame's cursor* in small steps (≈ ⅓ of the smallest cell
+  dimension), call `grid.cellAt()` at each step, and dedupe the cell IDs into the
+  stroke. This keeps fast strokes solid. We deliberately use supersampling rather
+  than a true 3-axis DDA because the grid is **curved** (spherical `r,θ,φ`): a
+  straight world-space segment does not step cleanly along the `(ir,it,ip)` index
+  axes, so DDA would be fragile. Supersampling is grid-shape-agnostic. Lives in
+  `core/brush.js`.
+- **Tap vs hold split:** released within **~150 ms** with negligible cursor
+  movement → **tap-toggle** a single cell; otherwise it's a **brush stroke**.
+- **Re-paint within a stroke:** skip cells already lit this stroke (idempotent).
+  A *new* stroke over a lit cell may bump its glow (lets you "press" intensity by
+  sweeping twice).
+
+### 3.1b No screen force sensor — what replaces "press harder"
+
+There is **no usable screen pressure input** to build on:
+
+- Apple's **3D Touch** (real capacitive force layer) shipped only on **iPhone 6s –
+  XS**; it was **removed on iPhone 11 (2019) and all later models**, replaced by
+  *Haptic Touch* (a long-press timer, no force). Almost no Android phone ever had
+  screen force hardware.
+- The web APIs that look like force lie on modern devices: `PointerEvent.pressure`
+  returns a constant `0.5` for any active touch (`0` for none), and `Touch.force`
+  is pinned to a constant off old iPhones. Treat pressure as **unavailable**.
+
+So the "press harder = brighter glow" feel is produced **without** force hardware:
+
+- **Hold duration** on the trigger → drives `cell.intensity` (graded glow). This
+  is the primary analog axis and maps directly to the model's `intensity` field.
+- **Contact area** (`Touch.radiusX/Y`) is an optional, noisy pressure proxy if we
+  ever want a second analog axis cross-platform.
+- A future **native (Capacitor) shell** still gets *no* screen force on current
+  phones — but does unlock hardware buttons and steadier sensors as analog inputs.
+
 ### 3.2 Why not the alternatives you suggested
 
 - **Phone hardware buttons (volume etc.):** the browser/`DeviceOrientation` path
@@ -200,7 +241,7 @@ spacepoint/
 │  ├─ core/                   # pure logic, no DOM, no three rendering — unit-testable
 │  │  ├─ spherical-grid.js    # cellAt(point), cellCorners(id), neighbors(id), pack/unpack
 │  │  ├─ voxel-model.js       # VoxelModel: activate/erase/toggle/clear, serialize/load
-│  │  └─ brush.js             # turns a stream of cursor cells + trigger state into edits
+│  │  └─ brush.js             # line-fill: supersample last→current segment, cellAt each step, dedupe → edits
 │  │
 │  ├─ render/
 │  │  ├─ scene.js             # three scene, camera, lights, render loop hooks
