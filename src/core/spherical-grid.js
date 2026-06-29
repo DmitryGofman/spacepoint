@@ -83,8 +83,35 @@ export class SphericalGrid {
 
     const ir = this._rIndex(r);
     const it = this._thetaIndex(theta);
-    const ip = Math.floor((phi / (Math.PI * 2)) * this.Pdiv) % this.Pdiv;
+    // the two pole bands are single cap cells (no phi split) -> no singularity
+    const ip =
+      it === 0 || it === this.Tdiv - 1
+        ? 0
+        : Math.floor((phi / (Math.PI * 2)) * this.Pdiv) % this.Pdiv;
     return this.pack(ir, it, ip);
+  }
+
+  /** Is this cell one of the merged pole caps (top or bottom band)? */
+  isCap(id) {
+    const it = Math.floor(id / this.Pdiv) % this.Tdiv;
+    return it === 0 || it === this.Tdiv - 1;
+  }
+
+  /** Geometry params for a cap cell: radial shell, rim angle, which pole. */
+  capParams(id) {
+    const { ir, it } = this.unpack(id);
+    const top = it === 0;
+    return {
+      r0: this._rEdge(ir),
+      r1: this._rEdge(ir + 1),
+      tRim: top ? this._thetaEdge(1) : this._thetaEdge(this.Tdiv - 1),
+      top,
+    };
+  }
+
+  /** Spherical (r, theta, phi) -> world Cartesian (Vector3). Public alias. */
+  toCartesian(r, theta, phi, out = new THREE.Vector3()) {
+    return this._toCartesian(r, theta, phi, out);
   }
 
   /** Spherical (r, theta, phi) -> world Cartesian (Vector3). */

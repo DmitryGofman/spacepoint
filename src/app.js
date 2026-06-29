@@ -18,6 +18,7 @@ import { saveFigure, loadFigure } from "./persistence/store.js";
 const ORIGIN = new THREE.Vector3(0, 0, 0);
 const MAX_REACH = 1.0; // == grid.R, so the cursor spans the whole sphere
 const TAP_MS = 150; // press shorter than this (no cell change) = tap-toggle
+const TOP_PITCH = 1.5533; // ~89deg up: beam points at the top of the sphere
 const PALETTE = [0x33ff99, 0x4aa8ff, 0xff9d3f, 0xff5d73, 0xffd23f, 0xb96bff];
 
 // ---- wiring ---------------------------------------------------------------
@@ -63,6 +64,7 @@ function beginPress() {
   press.startCell = grid.cellAt(localTarget);
   press.decided = false;
   press.brushing = false;
+  model.beginEdit(); // everything until endPress is one Undo step
 }
 
 function endPress() {
@@ -75,6 +77,7 @@ function endPress() {
   } else if (press.brushing) {
     brush.end();
   }
+  model.commitEdit();
 }
 
 function tickPress(hoverId) {
@@ -147,11 +150,15 @@ ui("mode").addEventListener("click", (e) => {
 ui("recenter").addEventListener("click", () => {
   if (pointer.isManual) {
     yaw = 0;
-    pitch = 0.3;
+    pitch = TOP_PITCH; // beam to the top of the sphere
     pointer.setManualAim(yaw, pitch);
   } else {
-    pointer.recenter();
+    pointer.recenter(); // IMU neutral = aim axis = top of the sphere
   }
+});
+
+ui("undo").addEventListener("click", () => {
+  if (!model.undo()) flash("nothing to undo");
 });
 
 ui("clear").addEventListener("click", () => model.clear());
@@ -193,8 +200,16 @@ function setAimMode(m) {
   const imu = m === "imu";
   view.controls.enableRotate = imu;
   view.controls.enableZoom = true;
-  if (imu) pointer.setAimMode("imu");
-  else pointer.setManualAim(yaw, pitch); // beam frozen here; sphere rotates instead
+  if (imu) {
+    pointer.setAimMode("imu");
+  } else if (m === "sphere") {
+    // beam parked at the top of the sphere; you rotate the sphere under it
+    yaw = 0;
+    pitch = TOP_PITCH;
+    pointer.setManualAim(yaw, pitch);
+  } else {
+    pointer.setManualAim(yaw, pitch); // drag-beam: keep where it is, then follow finger
+  }
   document
     .querySelectorAll("#aimseg button")
     .forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
@@ -236,8 +251,9 @@ canvasEl.addEventListener("pointerdown", (e) => {
 canvasEl.addEventListener("pointermove", (e) => {
   if (!dragging) return;
   if (aimMode === "beam") {
-    yaw = syaw - (e.clientX - lastX) * 0.006;
-    pitch = Math.max(-1.5, Math.min(1.5, spitch + (e.clientY - lastY) * 0.006));
+    // follow the finger: drag right -> beam right, drag up -> beam up
+    yaw = syaw + (e.clientX - lastX) * 0.006;
+    pitch = Math.max(-1.5, Math.min(1.5, spitch - (e.clientY - lastY) * 0.006));
     pointer.setManualAim(yaw, pitch);
   } else if (aimMode === "sphere") {
     const dx = (e.clientX - lastX) * 0.01;

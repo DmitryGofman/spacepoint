@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { appendCellTriangles, appendCellEdges } from "./cell-mesher.js";
+import { appendCellFill, appendCellWire } from "./cell-mesher.js";
 
 /**
  * Renders the lit cells of a VoxelModel as translucent, glowing pyramids.
@@ -37,7 +37,6 @@ export function createLitCells(grid, model, opacity = 0.42) {
   const group = new THREE.Group();
   group.add(fill, edges);
 
-  const corners = [];
   const color = new THREE.Color();
 
   function rebuild() {
@@ -46,11 +45,12 @@ export function createLitCells(grid, model, opacity = 0.42) {
     const epos = [];
     const ecol = [];
     for (const cell of model.cells.values()) {
-      grid.cellCorners(cell.id, corners);
       color.set(cell.color).multiplyScalar(cell.intensity);
-      appendCellTriangles(corners, color, pos, col);
-      appendCellEdges(corners, epos);
-      for (let i = 0; i < 24; i++) ecol.push(color.r, color.g, color.b);
+      appendCellFill(grid, cell.id, color, pos, col);
+      const before = epos.length;
+      appendCellWire(grid, cell.id, epos);
+      const verts = (epos.length - before) / 3;
+      for (let i = 0; i < verts; i++) ecol.push(color.r, color.g, color.b);
     }
     setAttr(fillGeom, pos, col);
     setAttr(edgeGeom, epos, ecol);

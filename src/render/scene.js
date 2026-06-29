@@ -42,7 +42,7 @@ export function createScene(canvas, { cameraDist = 2.3, bloom = 0.5 } = {}) {
     new THREE.Vector2(1, 1),
     bloom, // strength
     0.6, // radius
-    0.0 // threshold
+    0.2 // threshold: only brighter cores bloom -> less flare at the sphere limb
   );
   composer.addPass(bloomPass);
 

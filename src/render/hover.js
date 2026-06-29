@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { appendCellEdges } from "./cell-mesher.js";
+import { appendCellWire } from "./cell-mesher.js";
 
 /** A bright outline of the cell currently under the cursor (what a tap edits). */
 export function createHover(grid, color = 0xffffff) {
@@ -14,7 +14,6 @@ export function createHover(grid, color = 0xffffff) {
   lines.frustumCulled = false;
   lines.renderOrder = 999;
 
-  const corners = [];
   let current = -2;
 
   return {
@@ -27,9 +26,8 @@ export function createHover(grid, color = 0xffffff) {
         return;
       }
       lines.visible = true;
-      grid.cellCorners(id, corners);
       const pos = [];
-      appendCellEdges(corners, pos);
+      appendCellWire(grid, id, pos);
       geom.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
       geom.computeBoundingSphere();
     },
