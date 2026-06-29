@@ -202,13 +202,11 @@ function setAimMode(m) {
   view.controls.enableZoom = true;
   if (imu) {
     pointer.setAimMode("imu");
-  } else if (m === "sphere") {
-    // beam parked at the top of the sphere; you rotate the sphere under it
+  } else {
+    // sphere: beam parked at the top; you rotate the sphere under it
     yaw = 0;
     pitch = TOP_PITCH;
     pointer.setManualAim(yaw, pitch);
-  } else {
-    pointer.setManualAim(yaw, pitch); // drag-beam: keep where it is, then follow finger
   }
   document
     .querySelectorAll("#aimseg button")
@@ -229,42 +227,33 @@ glowSlider.addEventListener("input", (e) => {
   ui("glowVal").textContent = (+e.target.value).toFixed(2);
 });
 
-// ---- one-finger drag on the canvas: aim the beam OR rotate the sphere -------
+// ---- one-finger drag on the canvas: rotate the sphere (Drag-sphere mode) ----
 const canvasEl = ui("view");
 const activePointers = new Set();
 let dragging = false;
-let lastX = 0, lastY = 0, syaw = 0, spitch = 0;
+let lastX = 0, lastY = 0;
 const rot = new THREE.Quaternion();
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const AXIS_X = new THREE.Vector3(1, 0, 0);
 
 canvasEl.addEventListener("pointerdown", (e) => {
   activePointers.add(e.pointerId);
-  if (aimMode === "imu") return; // OrbitControls handles it
+  if (aimMode !== "sphere") return; // IMU mode: OrbitControls handles it
   if (activePointers.size > 1) { dragging = false; return; } // 2 fingers -> pinch zoom
   dragging = true;
   lastX = e.clientX;
   lastY = e.clientY;
-  syaw = yaw;
-  spitch = pitch;
 });
 canvasEl.addEventListener("pointermove", (e) => {
   if (!dragging) return;
-  if (aimMode === "beam") {
-    // follow the finger: drag right -> beam right, drag up -> beam up
-    yaw = syaw + (e.clientX - lastX) * 0.006;
-    pitch = Math.max(-1.5, Math.min(1.5, spitch - (e.clientY - lastY) * 0.006));
-    pointer.setManualAim(yaw, pitch);
-  } else if (aimMode === "sphere") {
-    const dx = (e.clientX - lastX) * 0.01;
-    const dy = (e.clientY - lastY) * 0.01;
-    rot.setFromAxisAngle(AXIS_Y, dx);
-    view.worldGroup.quaternion.premultiply(rot);
-    rot.setFromAxisAngle(AXIS_X, dy);
-    view.worldGroup.quaternion.premultiply(rot);
-    lastX = e.clientX;
-    lastY = e.clientY;
-  }
+  const dx = (e.clientX - lastX) * 0.01;
+  const dy = (e.clientY - lastY) * 0.01;
+  rot.setFromAxisAngle(AXIS_Y, dx);
+  view.worldGroup.quaternion.premultiply(rot);
+  rot.setFromAxisAngle(AXIS_X, dy);
+  view.worldGroup.quaternion.premultiply(rot);
+  lastX = e.clientX;
+  lastY = e.clientY;
 });
 function endPointer(e) {
   activePointers.delete(e.pointerId);
@@ -279,6 +268,7 @@ startBtn.addEventListener("click", async () => {
   try {
     await requestOrientationPermission();
     listenOrientation(pointer);
+    setAimMode("imu"); // make sure IMU drives the beam right away
     startBtn.classList.add("hidden");
     flash("sensors on");
   } catch (err) {
@@ -293,11 +283,14 @@ window.addEventListener("keyup", (e) => keys.delete(e.key));
 setInterval(() => {
   if (pointer.hasOrientation || aimMode === "sphere") return;
   const s = 0.04;
-  if (keys.has("ArrowLeft")) yaw += s;
-  if (keys.has("ArrowRight")) yaw -= s;
-  if (keys.has("ArrowUp")) pitch += s;
-  if (keys.has("ArrowDown")) pitch -= s;
-  pointer.setManualAim(yaw, pitch);
+  let moved = false;
+  if (keys.has("ArrowLeft")) (yaw += s), (moved = true);
+  if (keys.has("ArrowRight")) (yaw -= s), (moved = true);
+  if (keys.has("ArrowUp")) (pitch += s), (moved = true);
+  if (keys.has("ArrowDown")) (pitch -= s), (moved = true);
+  // only take over (manual mode) on an actual keypress, so a phone with no
+  // keyboard never blocks the IMU from driving the beam.
+  if (moved) pointer.setManualAim(yaw, pitch);
 }, 16);
 // space = paint trigger on desktop
 window.addEventListener("keydown", (e) => {
@@ -315,4 +308,15 @@ function flash(msg) {
   el.textContent = msg;
   el.classList.add("show");
   setTimeout(() => el.classList.remove("show"), 1400);
+}
+
+// inert unless the URL ends in #debug — used by the headless test harness
+if (location.hash === "#debug") {
+  window.__sp = {
+    pointer,
+    model,
+    get aimMode() {
+      return aimMode;
+    },
+  };
 }
