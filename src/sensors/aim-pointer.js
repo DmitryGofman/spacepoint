@@ -32,6 +32,14 @@ export function createAimPointer({
   let manualYaw = 0;
   let manualPitch = 0;
 
+  // continuity gate: reject single-frame teleports (sensor gimbal-lock glitches)
+  const candDir = new THREE.Vector3();
+  let oriInit = false;
+  let rejectFrames = 0;
+  let jumpGate = 0.8; // rad (~46deg): max plausible beam move between readings
+  const MAX_REJECT = 12; // after this many held frames, accept (real large move)
+  let rejecting = false;
+
   function onDeviceOrientation(e) {
     if (mode !== "imu") return; // ignore the IMU while in drag/manual mode
     let aDeg = e.alpha || 0;
@@ -46,6 +54,10 @@ export function createAimPointer({
     const g = ((e.gamma || 0) * Math.PI) / 180;
     euler.set(b, a, -g, "YXZ");
     rawQuat.setFromEuler(euler).multiply(Q_FLAT);
+    if (!oriInit) {
+      smoothQuat.copy(rawQuat); // seed so the beam starts in the right place
+      oriInit = true;
+    }
     hasOrientation = true;
   }
 
@@ -90,7 +102,31 @@ export function createAimPointer({
       up.normalize();
       return dir;
     }
-    smoothQuat.slerp(rawQuat, smoothing);
+    // Where would the raw reading put the beam? If that's a physically
+    // implausible jump from the current beam, it's a sensor singularity glitch
+    // (gimbal lock on a full rotation), not a real move -> reject it and hold
+    // the smooth path, so the beam continues as intended. Resume once readings
+    // become continuous again; only snap if the big move is sustained.
+    candDir
+      .copy(aimAxis)
+      .applyQuaternion(rawQuat)
+      .applyQuaternion(offsetInv)
+      .multiply(invert)
+      .normalize();
+    const jump = dir.angleTo(candDir);
+    if (jump <= jumpGate) {
+      smoothQuat.slerp(rawQuat, smoothing);
+      rejectFrames = 0;
+      rejecting = false;
+    } else if (rejectFrames >= MAX_REJECT) {
+      smoothQuat.copy(rawQuat); // sustained -> a real large move, accept it
+      rejectFrames = 0;
+      rejecting = false;
+    } else {
+      rejectFrames++; // not smooth -> hold this frame
+      rejecting = true;
+    }
+
     dir
       .copy(aimAxis)
       .applyQuaternion(smoothQuat)
@@ -119,6 +155,12 @@ export function createAimPointer({
     target,
     setSmoothing(a) {
       smoothing = a;
+    },
+    setJumpGate(rad) {
+      jumpGate = rad;
+    },
+    get rejecting() {
+      return rejecting;
     },
     get direction() {
       return dir;
