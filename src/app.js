@@ -18,7 +18,7 @@ import { saveFigure, loadFigure } from "./persistence/store.js";
 const ORIGIN = new THREE.Vector3(0, 0, 0);
 const MAX_REACH = 1.0; // == grid.R, so the cursor spans the whole sphere
 const TAP_MS = 150; // press shorter than this (no cell change) = tap-toggle
-const PALETTE = [0x33ff99, 0x4aa8ff, 0xff5d73, 0xffd23f, 0xb96bff];
+const PALETTE = [0x33ff99, 0x4aa8ff, 0xff9d3f, 0xff5d73, 0xffd23f, 0xb96bff];
 
 // ---- wiring ---------------------------------------------------------------
 const canvas = document.getElementById("view");
@@ -108,6 +108,11 @@ view.onFrame = () => {
 // ---- HUD ------------------------------------------------------------------
 const ui = (id) => document.getElementById(id);
 
+// shared aim state (used by IMU recenter, drag-aim, and keyboard fallback)
+let yaw = 0;
+let pitch = 0.3;
+let aimMode = "imu"; // "imu" = move the phone, "manual" = drag the sphere
+
 ui("reach").addEventListener("input", (e) => (reach = +e.target.value));
 
 const trigger = ui("trigger");
@@ -130,7 +135,15 @@ ui("mode").addEventListener("click", (e) => {
   e.target.classList.toggle("erase", eraseMode);
 });
 
-ui("recenter").addEventListener("click", () => pointer.recenter());
+ui("recenter").addEventListener("click", () => {
+  if (pointer.isManual) {
+    yaw = 0;
+    pitch = 0.3;
+    pointer.setManualAim(yaw, pitch);
+  } else {
+    pointer.recenter();
+  }
+});
 
 ui("clear").addEventListener("click", () => model.clear());
 
@@ -160,6 +173,49 @@ PALETTE.forEach((c, i) => {
   palette.appendChild(sw);
 });
 
+// ---- settings: aim mode (IMU vs drag) + glow ------------------------------
+ui("settings").addEventListener("click", () => ui("panel").classList.toggle("open"));
+
+function setAimMode(m) {
+  aimMode = m;
+  if (m === "manual") {
+    view.controls.enabled = false; // free the canvas for drag-aim
+    pointer.setManualAim(yaw, pitch);
+  } else {
+    view.controls.enabled = true; // drag orbits the camera again
+    pointer.setAimMode("imu");
+  }
+  document
+    .querySelectorAll("#aimseg button")
+    .forEach((b) => b.classList.toggle("active", b.dataset.mode === m));
+}
+document.querySelectorAll("#aimseg button").forEach((b) =>
+  b.addEventListener("click", () => setAimMode(b.dataset.mode))
+);
+
+ui("glow").addEventListener("input", (e) => litCells.setOpacity(+e.target.value));
+
+// drag the sphere to aim (only when aim mode is "manual")
+const canvasEl = ui("view");
+let dragging = false;
+let sx = 0, sy = 0, syaw = 0, spitch = 0;
+canvasEl.addEventListener("pointerdown", (e) => {
+  if (aimMode !== "manual") return;
+  dragging = true;
+  sx = e.clientX;
+  sy = e.clientY;
+  syaw = yaw;
+  spitch = pitch;
+});
+window.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const k = 0.006;
+  yaw = syaw - (e.clientX - sx) * k;
+  pitch = Math.max(-1.5, Math.min(1.5, spitch + (e.clientY - sy) * k));
+  pointer.setManualAim(yaw, pitch);
+});
+window.addEventListener("pointerup", () => (dragging = false));
+
 // ---- sensor start (iOS gesture) + desktop fallback ------------------------
 const startBtn = ui("start");
 startBtn.addEventListener("click", async () => {
@@ -173,9 +229,7 @@ startBtn.addEventListener("click", async () => {
   }
 });
 
-// Desktop fallback: arrow keys aim, drag isn't needed. Active until IMU data.
-let yaw = 0;
-let pitch = 0.3;
+// Desktop fallback: arrow keys aim. Active whenever there's no IMU data.
 const keys = new Set();
 window.addEventListener("keydown", (e) => keys.add(e.key));
 window.addEventListener("keyup", (e) => keys.delete(e.key));

@@ -8,17 +8,16 @@ import { appendCellTriangles, appendCellEdges } from "./cell-mesher.js";
  * instead we rebuild a single merged BufferGeometry whenever the model changes
  * (model.dirty). Cost scales with the number of *lit* cells, not the whole grid.
  *
- * The "glow but see-through" look = additive-blended, unlit MeshBasicMaterial
- * (full-bright color) at low opacity, with a brighter wireframe overlay so the
- * pyramids read as crisp shapes rather than blobs.
+ * Look: normal alpha blending (NOT additive) so overlapping cells stay coloured
+ * and translucent instead of stacking to pure white, with a brighter wireframe
+ * overlay so the pyramids read as crisp shapes. Overall glow is adjustable.
  */
-export function createLitCells(grid, model) {
+export function createLitCells(grid, model, opacity = 0.42) {
   const fillGeom = new THREE.BufferGeometry();
   const fillMat = new THREE.MeshBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.5,
-    blending: THREE.AdditiveBlending,
+    opacity,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
@@ -29,8 +28,7 @@ export function createLitCells(grid, model) {
   const edgeMat = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.85,
-    blending: THREE.AdditiveBlending,
+    opacity: Math.min(1, opacity + 0.35),
     depthWrite: false,
   });
   const edges = new THREE.LineSegments(edgeGeom, edgeMat);
@@ -65,6 +63,10 @@ export function createLitCells(grid, model) {
     object3d: group,
     update() {
       if (model.dirty) rebuild();
+    },
+    setOpacity(v) {
+      fillMat.opacity = v;
+      edgeMat.opacity = Math.min(1, v + 0.35);
     },
   };
 }

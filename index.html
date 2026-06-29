@@ -26,28 +26,51 @@
       }
       #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 
-      /* top bar */
+      /* top bar — horizontally scrollable so every control is reachable */
       #top {
         position: fixed; top: 0; left: 0; right: 0;
         display: flex; gap: 8px; align-items: center;
         padding: max(8px, env(safe-area-inset-top)) 10px 8px;
-        pointer-events: none;
+        overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch; scrollbar-width: none;
+        -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
       }
-      #top > * { pointer-events: auto; }
+      #top::-webkit-scrollbar { display: none; }
+      #top > * { flex: 0 0 auto; }
       .btn {
         background: var(--panel); color: var(--ink);
         border: 1px solid var(--line); border-radius: 10px;
         padding: 8px 12px; font-size: 13px; backdrop-filter: blur(6px);
+        white-space: nowrap;
       }
       .btn:active { transform: scale(0.96); }
       .btn.off { opacity: 0.45; }
       #mode.erase { color: #ff8da1; border-color: #ff8da1; }
-      #palette { display: flex; gap: 6px; margin-left: auto; }
+      #palette { display: flex; gap: 6px; }
       .swatch {
-        width: 26px; height: 26px; border-radius: 50%;
+        width: 28px; height: 28px; border-radius: 50%;
         border: 2px solid transparent; padding: 0;
       }
       .swatch.active { border-color: #fff; }
+
+      /* settings panel */
+      #panel {
+        position: fixed; top: 60px; right: 12px; width: 230px;
+        background: var(--panel); border: 1px solid var(--line);
+        border-radius: 14px; padding: 14px; backdrop-filter: blur(10px);
+        display: none; z-index: 10;
+      }
+      #panel.open { display: block; }
+      #panel h3 { margin: 0 0 6px; font-size: 12px; opacity: 0.7; font-weight: 600; }
+      #panel .row { margin-bottom: 14px; }
+      #panel .seg { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+      #panel .seg button {
+        flex: 1; background: transparent; color: var(--ink); border: 0;
+        padding: 9px 6px; font-size: 13px;
+      }
+      #panel .seg button.active { background: #33ff99; color: #04130c; font-weight: 600; }
+      #panel input[type=range] { width: 100%; accent-color: #33ff99; }
+      #panel .hintline { font-size: 11px; opacity: 0.55; margin-top: 4px; }
 
       /* reach slider, vertical on the right */
       #reach-wrap {
@@ -101,7 +124,23 @@
       <button id="scaffold" class="btn">Grid</button>
       <button id="clear" class="btn">Clear</button>
       <button id="save" class="btn">Save</button>
+      <button id="settings" class="btn">⚙ Settings</button>
       <div id="palette"></div>
+    </div>
+
+    <div id="panel">
+      <div class="row">
+        <h3>AIM CONTROL</h3>
+        <div class="seg" id="aimseg">
+          <button data-mode="imu" class="active">IMU (move phone)</button>
+          <button data-mode="manual">Drag sphere</button>
+        </div>
+        <div class="hintline">Drag mode: swipe the sphere to aim instead of tilting the phone.</div>
+      </div>
+      <div class="row">
+        <h3>GLOW</h3>
+        <input id="glow" type="range" min="0.12" max="0.85" step="0.01" value="0.42" />
+      </div>
     </div>
 
     <div id="reach-wrap">
@@ -112,8 +151,8 @@
     <button id="start">Grant sensors &amp; start</button>
     <div id="status"></div>
     <div id="hint">
-      Phone: tap start, point to aim, slide for reach, hold the dot to paint. &nbsp;
-      Desktop: arrow keys aim, space = paint, drag = orbit.
+      Point to aim, slide for reach, hold to paint. Scroll the top bar for colors. &nbsp;
+      ⚙ Settings → switch to Drag-aim or tune glow.
     </div>
 
     <script type="module" src="/src/app.js"></script>

@@ -31,6 +31,33 @@ export class SphericalGrid {
     return this.Rdiv * this.Tdiv * this.Pdiv;
   }
 
+  // --- non-uniform slicing so cells are more even in size --------------------
+  // Equal-VOLUME radial shells: inner shells are thicker (a big, easy-to-hit
+  // cell at the center) instead of the center being a cluster of tiny pyramids.
+  //   r(i) = R * (i / Rdiv)^(1/3)        edge i in [0, Rdiv]
+  //   i(r) = floor( (r/R)^3 * Rdiv )
+  _rEdge(i) {
+    return this.R * Math.cbrt(i / this.Rdiv);
+  }
+  _rIndex(r) {
+    const f = r / this.R;
+    return Math.min(this.Rdiv - 1, Math.floor(f * f * f * this.Rdiv));
+  }
+
+  // Equal-AREA latitude bands (slice by cos theta): bands near the poles span a
+  // wider polar angle, so the top/bottom cells are fatter and easier to aim.
+  //   theta(i) = acos(1 - 2 i / Tdiv)    edge i in [0, Tdiv]
+  //   i(theta) = floor( (1 - cos theta)/2 * Tdiv )
+  _thetaEdge(i) {
+    return Math.acos(Math.min(1, Math.max(-1, 1 - (2 * i) / this.Tdiv)));
+  }
+  _thetaIndex(cosTheta) {
+    return Math.min(
+      this.Tdiv - 1,
+      Math.floor(((1 - cosTheta) / 2) * this.Tdiv)
+    );
+  }
+
   pack(ir, it, ip) {
     return (ir * this.Tdiv + it) * this.Pdiv + ip;
   }
@@ -50,12 +77,12 @@ export class SphericalGrid {
     const r = Math.sqrt(vx * vx + vy * vy + vz * vz);
     if (r > this.R) return -1;
 
-    const theta = r === 0 ? 0 : Math.acos(Math.min(1, Math.max(-1, vy / r)));
+    const cosTheta = r === 0 ? 1 : Math.min(1, Math.max(-1, vy / r));
     let phi = Math.atan2(vz, vx);
     if (phi < 0) phi += Math.PI * 2;
 
-    const ir = Math.min(this.Rdiv - 1, Math.floor((r / this.R) * this.Rdiv));
-    const it = Math.min(this.Tdiv - 1, Math.floor((theta / Math.PI) * this.Tdiv));
+    const ir = this._rIndex(r);
+    const it = this._thetaIndex(cosTheta);
     const ip = Math.floor((phi / (Math.PI * 2)) * this.Pdiv) % this.Pdiv;
     return this.pack(ir, it, ip);
   }
@@ -76,10 +103,10 @@ export class SphericalGrid {
    */
   cellCorners(id, out = []) {
     const { ir, it, ip } = this.unpack(id);
-    const r0 = (ir / this.Rdiv) * this.R;
-    const r1 = ((ir + 1) / this.Rdiv) * this.R;
-    const t0 = (it / this.Tdiv) * Math.PI;
-    const t1 = ((it + 1) / this.Tdiv) * Math.PI;
+    const r0 = this._rEdge(ir);
+    const r1 = this._rEdge(ir + 1);
+    const t0 = this._thetaEdge(it);
+    const t1 = this._thetaEdge(it + 1);
     const p0 = (ip / this.Pdiv) * Math.PI * 2;
     const p1 = ((ip + 1) / this.Pdiv) * Math.PI * 2;
     const rs = [r0, r1];
@@ -98,8 +125,8 @@ export class SphericalGrid {
 
   cellCenter(id, out = new THREE.Vector3()) {
     const { ir, it, ip } = this.unpack(id);
-    const r = ((ir + 0.5) / this.Rdiv) * this.R;
-    const theta = ((it + 0.5) / this.Tdiv) * Math.PI;
+    const r = (this._rEdge(ir) + this._rEdge(ir + 1)) * 0.5;
+    const theta = (this._thetaEdge(it) + this._thetaEdge(it + 1)) * 0.5;
     const phi = ((ip + 0.5) / this.Pdiv) * Math.PI * 2;
     return this._toCartesian(r, theta, phi, out);
   }

@@ -25,11 +25,12 @@ export function createAimPointer({
   const euler = new THREE.Euler();
   let heading = null;
   let hasOrientation = false;
-  let manual = true;
+  let mode = "imu"; // "imu" = device orientation, "manual" = yaw/pitch (drag/keys)
   let manualYaw = 0;
   let manualPitch = 0;
 
   function onDeviceOrientation(e) {
+    if (mode !== "imu") return; // ignore the IMU while in drag/manual mode
     let aDeg = e.alpha || 0;
     if (e.webkitCompassHeading != null) {
       heading = e.webkitCompassHeading; // iOS absolute heading
@@ -43,19 +44,23 @@ export function createAimPointer({
     euler.set(b, a, -g, "YXZ");
     rawQuat.setFromEuler(euler).multiply(Q_FLAT);
     hasOrientation = true;
-    manual = false;
   }
 
-  /** Desktop fallback: aim from yaw (around +Y) and pitch (up/down), radians. */
+  /** Drag / keyboard aim: yaw (around +Y) and pitch (up/down), radians. */
   function setManualAim(yaw, pitch) {
-    manual = true;
+    mode = "manual";
     manualYaw = yaw;
     manualPitch = Math.max(-1.5533, Math.min(1.5533, pitch));
   }
 
+  /** Switch between "imu" (phone orientation) and "manual" (drag/keys) aim. */
+  function setAimMode(m) {
+    mode = m === "manual" ? "manual" : "imu";
+  }
+
   /** Capture the current orientation as the new "forward" reference. */
   function recenter() {
-    if (manual) {
+    if (mode === "manual") {
       manualYaw = 0;
       manualPitch = 0;
     } else {
@@ -65,7 +70,7 @@ export function createAimPointer({
 
   /** Advance smoothing + recompute the aim direction. Call once per frame. */
   function update() {
-    if (manual) {
+    if (mode === "manual") {
       const cp = Math.cos(manualPitch);
       dir
         .set(
@@ -95,6 +100,7 @@ export function createAimPointer({
   return {
     onDeviceOrientation,
     setManualAim,
+    setAimMode,
     recenter,
     update,
     target,
@@ -110,8 +116,11 @@ export function createAimPointer({
     get hasOrientation() {
       return hasOrientation;
     },
+    get mode() {
+      return mode;
+    },
     get isManual() {
-      return manual;
+      return mode === "manual";
     },
   };
 }
