@@ -75,6 +75,8 @@
       #panel input[type=range] { width: 100%; accent-color: #33ff99; }
       #panel .hintline { font-size: 11px; opacity: 0.55; margin-top: 6px; }
       #panel .val { float: right; opacity: 0.6; font-weight: 400; }
+      #panel .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+      #panel .chk input { width: 18px; height: 18px; accent-color: #33ff99; }
 
       /* reach slider, vertical on the right */
       #reach-wrap {
@@ -149,6 +151,11 @@
       <div class="row">
         <h3>GLOW <span id="glowVal" class="val">0.5</span></h3>
         <input id="glow" type="range" min="0" max="1.6" step="0.05" value="0.5" />
+      </div>
+      <div class="row">
+        <h3>MOTION</h3>
+        <label class="chk"><input type="checkbox" id="gyro" checked /> Gyro stabilize (fixes full-circle jumps)</label>
+        <div class="hintline">If aiming feels wrong/inverted, turn this off.</div>
       </div>
     </div>
 

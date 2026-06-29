@@ -226,6 +226,7 @@ glowSlider.addEventListener("input", (e) => {
   view.setBloom(+e.target.value);
   ui("glowVal").textContent = (+e.target.value).toFixed(2);
 });
+ui("gyro").addEventListener("change", (e) => pointer.setGyro(e.target.checked));
 
 // ---- one-finger drag on the canvas: rotate the sphere (Drag-sphere mode) ----
 const canvasEl = ui("view");
