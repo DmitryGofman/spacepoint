@@ -18,10 +18,13 @@ export function createAimPointer({
   invert = new THREE.Vector3(1, 1, 1),
   smoothing = 0.25,
 } = {}) {
+  const aimAxis2 = new THREE.Vector3(0, 0, 1); // phone screen normal (for the roll marker)
   const rawQuat = new THREE.Quaternion();
   const smoothQuat = new THREE.Quaternion();
   const offsetInv = new THREE.Quaternion(); // applied after smoothing (recenter)
   const dir = new THREE.Vector3(0, 1, 0);
+  const up = new THREE.Vector3(0, 0, 1); // screen-normal direction in world space
+  const tmpUp = new THREE.Vector3();
   const euler = new THREE.Euler();
   let heading = null;
   let hasOrientation = false;
@@ -80,6 +83,11 @@ export function createAimPointer({
         )
         .multiply(invert)
         .normalize();
+      // no real roll in manual mode: point the screen marker "up" relative to aim
+      tmpUp.set(0, 1, 0);
+      up.copy(tmpUp).addScaledVector(dir, -tmpUp.dot(dir));
+      if (up.lengthSq() < 1e-4) up.set(0, 0, 1);
+      up.normalize();
       return dir;
     }
     smoothQuat.slerp(rawQuat, smoothing);
@@ -88,6 +96,11 @@ export function createAimPointer({
       .applyQuaternion(smoothQuat)
       .applyQuaternion(offsetInv)
       .multiply(invert)
+      .normalize();
+    up
+      .copy(aimAxis2)
+      .applyQuaternion(smoothQuat)
+      .applyQuaternion(offsetInv)
       .normalize();
     return dir;
   }
@@ -109,6 +122,9 @@ export function createAimPointer({
     },
     get direction() {
       return dir;
+    },
+    get up() {
+      return up;
     },
     get heading() {
       return heading;

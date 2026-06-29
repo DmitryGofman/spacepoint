@@ -64,13 +64,17 @@
       #panel h3 { margin: 0 0 6px; font-size: 12px; opacity: 0.7; font-weight: 600; }
       #panel .row { margin-bottom: 14px; }
       #panel .seg { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+      #panel .seg-v { flex-direction: column; }
       #panel .seg button {
         flex: 1; background: transparent; color: var(--ink); border: 0;
-        padding: 9px 6px; font-size: 13px;
+        padding: 10px 8px; font-size: 12.5px; text-align: left;
+        border-bottom: 1px solid var(--line);
       }
+      #panel .seg-v button:last-child { border-bottom: 0; }
       #panel .seg button.active { background: #33ff99; color: #04130c; font-weight: 600; }
       #panel input[type=range] { width: 100%; accent-color: #33ff99; }
-      #panel .hintline { font-size: 11px; opacity: 0.55; margin-top: 4px; }
+      #panel .hintline { font-size: 11px; opacity: 0.55; margin-top: 6px; }
+      #panel .val { float: right; opacity: 0.6; font-weight: 400; }
 
       /* reach slider, vertical on the right */
       #reach-wrap {
@@ -131,15 +135,20 @@
     <div id="panel">
       <div class="row">
         <h3>AIM CONTROL</h3>
-        <div class="seg" id="aimseg">
-          <button data-mode="imu" class="active">IMU (move phone)</button>
-          <button data-mode="manual">Drag sphere</button>
+        <div class="seg seg-v" id="aimseg">
+          <button data-mode="imu" class="active">IMU — move the phone</button>
+          <button data-mode="beam">Drag beam — swipe the cursor</button>
+          <button data-mode="sphere">Drag sphere — beam stays, rotate sphere</button>
         </div>
-        <div class="hintline">Drag mode: swipe the sphere to aim instead of tilting the phone.</div>
+        <div class="hintline">Two-finger pinch zooms the sphere in every mode.</div>
       </div>
       <div class="row">
-        <h3>GLOW</h3>
-        <input id="glow" type="range" min="0.12" max="0.85" step="0.01" value="0.42" />
+        <h3>OPACITY <span id="opacityVal" class="val">0.42</span></h3>
+        <input id="opacity" type="range" min="0.12" max="0.9" step="0.01" value="0.42" />
+      </div>
+      <div class="row">
+        <h3>GLOW <span id="glowVal" class="val">0.5</span></h3>
+        <input id="glow" type="range" min="0" max="1.6" step="0.05" value="0.5" />
       </div>
     </div>
 

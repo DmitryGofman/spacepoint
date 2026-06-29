@@ -15,15 +15,23 @@ import * as THREE from "three";
 export class SphericalGrid {
   constructor({
     R = 1,
-    Rdiv = 6,
-    Tdiv = 12,
-    Pdiv = 24,
+    Rdiv = 8,
+    Tdiv = 16,
+    Pdiv = 32,
+    // Slicing exponents. 1 = uniform. radialExp < 1 thickens inner shells
+    // (so the center isn't a cluster of tiny pyramids) without overshooting to
+    // a huge center cell the way pure equal-volume (1/3) did. thetaExp = 1 keeps
+    // latitude bands even so pole cells stay proportionate to the rest.
+    radialExp = 0.7,
+    thetaExp = 1.0,
     origin = new THREE.Vector3(),
   } = {}) {
     this.R = R;
     this.Rdiv = Rdiv;
     this.Tdiv = Tdiv;
     this.Pdiv = Pdiv;
+    this.radialExp = radialExp;
+    this.thetaExp = thetaExp;
     this.origin = origin.clone();
   }
 
@@ -31,31 +39,22 @@ export class SphericalGrid {
     return this.Rdiv * this.Tdiv * this.Pdiv;
   }
 
-  // --- non-uniform slicing so cells are more even in size --------------------
-  // Equal-VOLUME radial shells: inner shells are thicker (a big, easy-to-hit
-  // cell at the center) instead of the center being a cluster of tiny pyramids.
-  //   r(i) = R * (i / Rdiv)^(1/3)        edge i in [0, Rdiv]
-  //   i(r) = floor( (r/R)^3 * Rdiv )
+  // --- tunable non-uniform slicing (see constructor) -------------------------
+  //   r(i)     = R * (i / Rdiv)^radialExp        i(r)     = (r/R)^(1/radialExp) * Rdiv
+  //   theta(i) = pi * (i / Tdiv)^thetaExp        i(theta) = (theta/pi)^(1/thetaExp) * Tdiv
   _rEdge(i) {
-    return this.R * Math.cbrt(i / this.Rdiv);
+    return this.R * Math.pow(i / this.Rdiv, this.radialExp);
   }
   _rIndex(r) {
-    const f = r / this.R;
-    return Math.min(this.Rdiv - 1, Math.floor(f * f * f * this.Rdiv));
+    const f = Math.pow(r / this.R, 1 / this.radialExp);
+    return Math.min(this.Rdiv - 1, Math.floor(f * this.Rdiv));
   }
-
-  // Equal-AREA latitude bands (slice by cos theta): bands near the poles span a
-  // wider polar angle, so the top/bottom cells are fatter and easier to aim.
-  //   theta(i) = acos(1 - 2 i / Tdiv)    edge i in [0, Tdiv]
-  //   i(theta) = floor( (1 - cos theta)/2 * Tdiv )
   _thetaEdge(i) {
-    return Math.acos(Math.min(1, Math.max(-1, 1 - (2 * i) / this.Tdiv)));
+    return Math.PI * Math.pow(i / this.Tdiv, this.thetaExp);
   }
-  _thetaIndex(cosTheta) {
-    return Math.min(
-      this.Tdiv - 1,
-      Math.floor(((1 - cosTheta) / 2) * this.Tdiv)
-    );
+  _thetaIndex(theta) {
+    const f = Math.pow(theta / Math.PI, 1 / this.thetaExp);
+    return Math.min(this.Tdiv - 1, Math.floor(f * this.Tdiv));
   }
 
   pack(ir, it, ip) {
@@ -78,11 +77,12 @@ export class SphericalGrid {
     if (r > this.R) return -1;
 
     const cosTheta = r === 0 ? 1 : Math.min(1, Math.max(-1, vy / r));
+    const theta = Math.acos(cosTheta);
     let phi = Math.atan2(vz, vx);
     if (phi < 0) phi += Math.PI * 2;
 
     const ir = this._rIndex(r);
-    const it = this._thetaIndex(cosTheta);
+    const it = this._thetaIndex(theta);
     const ip = Math.floor((phi / (Math.PI * 2)) * this.Pdiv) % this.Pdiv;
     return this.pack(ir, it, ip);
   }
