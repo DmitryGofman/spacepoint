@@ -272,6 +272,10 @@ startBtn.addEventListener("click", async () => {
     setAimMode("imu"); // make sure IMU drives the beam right away
     startBtn.classList.add("hidden");
     flash("sensors on");
+    // report whether the gyroscope is actually feeding us (gimbal-free path)
+    setTimeout(() => {
+      flash(pointer.gyroActive ? "gyro stabilized ✓" : "no gyro — compass mode");
+    }, 800);
   } catch (err) {
     flash("no sensors - using keys");
   }

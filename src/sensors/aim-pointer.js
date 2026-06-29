@@ -58,7 +58,6 @@ export function createAimPointer({
   let rejectFrames = 0;
   let jumpGate = 0.8; // rad (~46deg) max plausible beam move between frames
   const MAX_REJECT = 12;
-  const CORRECT_GAIN = 0.05; // how fast gyro is pulled toward (trusted) Euler
   let rejecting = false;
 
   // ---- inputs ---------------------------------------------------------------
@@ -89,22 +88,22 @@ export function createAimPointer({
     if (mode !== "imu" || !gyroEnabled) return;
     const rr = e.rotationRate;
     if (!rr || (rr.alpha == null && rr.beta == null && rr.gamma == null)) return;
-    const now = e.timeStamp || performance.now();
-    let dt = e.interval || (lastMotion ? (now - lastMotion) / 1000 : 0.016);
+    // dt from real timestamps (e.interval's unit is unreliable across browsers).
+    const now = performance.now();
+    let dt = lastMotion ? (now - lastMotion) / 1000 : 0.016;
     lastMotion = now;
-    dt = Math.min(0.05, Math.max(0.001, dt));
+    if (!(dt > 0) || dt > 0.1) dt = 0.016;
+    gyroActive = true;
     // W3C: rotationRate.beta=about X, gamma=about Y, alpha=about Z (deg/s)
     const wx = (rr.beta || 0) * DEG;
     const wy = (rr.gamma || 0) * DEG;
     const wz = (rr.alpha || 0) * DEG;
     const mag = Math.sqrt(wx * wx + wy * wy + wz * wz);
-    if (mag < 1e-6) return;
+    if (mag < 1e-7) return;
     const angle = mag * dt;
-    if (Math.abs(angle) < 1e-7) return;
     const s = Math.sin(angle / 2) / mag;
     dq.set(wx * s, wy * s, wz * s, Math.cos(angle / 2));
-    q.multiply(dq).normalize(); // body-frame integration
-    if (oriInit) gyroActive = true;
+    q.multiply(dq).normalize(); // pure body-frame quaternion integration
   }
 
   function setManualAim(yaw, pitch) {
@@ -152,17 +151,16 @@ export function createAimPointer({
       return dir;
     }
 
-    // how far is the Euler reading from the current beam? big = singularity glitch
-    dirFrom(q, dCur);
-    dirFrom(absQuat, dAbs);
-    const jump = dCur.angleTo(dAbs);
-
     if (gyroEnabled && gyroActive) {
-      // gyro already advanced q; only correct toward Euler when it's trustworthy
-      if (jump <= jumpGate) q.slerp(absQuat, CORRECT_GAIN);
-      rejecting = jump > jumpGate;
+      // PURE quaternion: the beam comes only from gyro-integrated body rate
+      // (no Euler/compass at all) -> gimbal lock cannot inject a jump. q is
+      // advanced in onDeviceMotion; slow drift is handled by Recenter.
+      rejecting = false;
     } else {
-      // fallback: follow Euler, hold through a glitch, snap only if sustained
+      // fallback (no gyro): follow the Euler reading but gate out its jumps
+      dirFrom(q, dCur);
+      dirFrom(absQuat, dAbs);
+      const jump = dCur.angleTo(dAbs);
       if (jump <= jumpGate) {
         q.slerp(absQuat, smoothing);
         rejectFrames = 0;
