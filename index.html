@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Spacepoint</title>
+    <style>
+      :root {
+        --bg: #05070d;
+        --ink: #cfe;
+        --panel: rgba(10, 16, 28, 0.72);
+        --line: rgba(120, 180, 255, 0.25);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
+      body {
+        font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        color: var(--ink);
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+        touch-action: none;
+      }
+      #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+      /* top bar */
+      #top {
+        position: fixed; top: 0; left: 0; right: 0;
+        display: flex; gap: 8px; align-items: center;
+        padding: max(8px, env(safe-area-inset-top)) 10px 8px;
+        pointer-events: none;
+      }
+      #top > * { pointer-events: auto; }
+      .btn {
+        background: var(--panel); color: var(--ink);
+        border: 1px solid var(--line); border-radius: 10px;
+        padding: 8px 12px; font-size: 13px; backdrop-filter: blur(6px);
+      }
+      .btn:active { transform: scale(0.96); }
+      .btn.off { opacity: 0.45; }
+      #mode.erase { color: #ff8da1; border-color: #ff8da1; }
+      #palette { display: flex; gap: 6px; margin-left: auto; }
+      .swatch {
+        width: 26px; height: 26px; border-radius: 50%;
+        border: 2px solid transparent; padding: 0;
+      }
+      .swatch.active { border-color: #fff; }
+
+      /* reach slider, vertical on the right */
+      #reach-wrap {
+        position: fixed; right: 14px; top: 50%; transform: translateY(-50%);
+        height: 46vh; display: flex; align-items: center;
+      }
+      #reach {
+        writing-mode: vertical-lr; direction: rtl;
+        width: 36px; height: 100%; accent-color: #33ff99;
+      }
+
+      /* paint trigger, big, bottom-left */
+      #trigger {
+        position: fixed;
+        left: max(18px, env(safe-area-inset-left));
+        bottom: max(24px, env(safe-area-inset-bottom));
+        width: 96px; height: 96px; border-radius: 50%;
+        background: radial-gradient(circle at 50% 40%, rgba(80,255,180,0.35), rgba(20,40,60,0.7));
+        border: 2px solid #33ff99; color: #eafff5; font-size: 13px; font-weight: 600;
+        backdrop-filter: blur(6px);
+      }
+      #trigger:active { background: radial-gradient(circle at 50% 40%, rgba(120,255,200,0.6), rgba(30,60,80,0.85)); }
+
+      /* start / permission gate */
+      #start {
+        position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+        padding: 14px 22px; font-size: 15px; border-radius: 14px;
+        background: #112; border: 1px solid #33ff99; color: #eafff5;
+      }
+      #start.hidden { display: none; }
+
+      #status {
+        position: fixed; left: 50%; top: 56px; transform: translateX(-50%);
+        background: var(--panel); border: 1px solid var(--line);
+        padding: 6px 12px; border-radius: 10px; opacity: 0; transition: opacity 0.2s;
+      }
+      #status.show { opacity: 1; }
+
+      #hint {
+        position: fixed; left: 50%; bottom: 6px; transform: translateX(-50%);
+        font-size: 11px; opacity: 0.5; text-align: center; width: 90%;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div id="top">
+      <button id="mode" class="btn">Paint</button>
+      <button id="recenter" class="btn">Recenter</button>
+      <button id="scaffold" class="btn">Grid</button>
+      <button id="clear" class="btn">Clear</button>
+      <button id="save" class="btn">Save</button>
+      <div id="palette"></div>
+    </div>
+
+    <div id="reach-wrap">
+      <input id="reach" type="range" min="0.05" max="1.0" step="0.01" value="0.6" />
+    </div>
+
+    <button id="trigger">HOLD<br />to paint</button>
+    <button id="start">Grant sensors &amp; start</button>
+    <div id="status"></div>
+    <div id="hint">
+      Phone: tap start, point to aim, slide for reach, hold the dot to paint. &nbsp;
+      Desktop: arrow keys aim, space = paint, drag = orbit.
+    </div>
+
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>

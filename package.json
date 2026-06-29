@@ -1,0 +1,19 @@
+{
+  "name": "spacepoint",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Build 3D figures inside a sphere of pyramids using phone orientation + a reach slider.",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
+    "vite": "^5.4.10"
+  }
+}
