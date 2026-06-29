@@ -6,22 +6,23 @@ import * as THREE from "three";
  *
  *   r     in [0, R]   split into Rdiv concentric shells
  *   theta in [0, pi]  polar angle from +Y, split into Tdiv bands
- *   phi   in [0, 2pi) azimuth around +Y, split into Pdiv sectors
+ *   phi   in [0, 2pi) azimuth, split into a PER-BAND number of sectors
  *
- * Each cell is a curved truncated pyramid (frustum) with its apex toward the
- * center; the innermost shell collapses to true pyramids. The grid is implicit:
- * we never instantiate cells, we compute the cell an arbitrary point falls in.
+ * The phi split is EQUAL-AREA: each latitude band uses ~ Pdiv * sin(theta)
+ * sectors, so cells stay roughly the same (small) size everywhere and there is
+ * no pole singularity — the beam crosses cells at a uniform rate instead of
+ * skipping a fan of thin slivers near the poles. The innermost band's cells
+ * collapse to true mini-pyramids with their apex at the pole.
  */
 export class SphericalGrid {
   constructor({
     R = 1,
     Rdiv = 8,
     Tdiv = 16,
-    Pdiv = 32,
-    // Slicing exponents. 1 = uniform. radialExp < 1 thickens inner shells
-    // (so the center isn't a cluster of tiny pyramids) without overshooting to
-    // a huge center cell the way pure equal-volume (1/3) did. thetaExp = 1 keeps
-    // latitude bands even so pole cells stay proportionate to the rest.
+    Pdiv = 32, // sector count at the equator; bands above/below use fewer
+    phiMin = 4, // never fewer than this many sectors (keeps pole cells as pyramids)
+    // Slicing exponents. 1 = uniform. radialExp < 1 thickens inner shells so the
+    // center isn't a cluster of tiny pyramids. thetaExp = 1 keeps latitude even.
     radialExp = 0.7,
     thetaExp = 1.0,
     origin = new THREE.Vector3(),
@@ -30,16 +31,34 @@ export class SphericalGrid {
     this.Rdiv = Rdiv;
     this.Tdiv = Tdiv;
     this.Pdiv = Pdiv;
+    this.phiMin = phiMin;
     this.radialExp = radialExp;
     this.thetaExp = thetaExp;
     this.origin = origin.clone();
+
+    // Precompute per-band sector counts + packing offsets (equal-area).
+    this._phiDiv = [];
+    this._bandOffset = [];
+    let off = 0;
+    for (let it = 0; it < Tdiv; it++) {
+      const tMid = (this._thetaEdge(it) + this._thetaEdge(it + 1)) * 0.5;
+      const n = Math.max(phiMin, Math.round(Pdiv * Math.sin(tMid)));
+      this._phiDiv.push(n);
+      this._bandOffset.push(off);
+      off += n;
+    }
+    this._bandSum = off; // cells per radial shell
   }
 
   get cellCount() {
-    return this.Rdiv * this.Tdiv * this.Pdiv;
+    return this.Rdiv * this._bandSum;
   }
 
-  // --- tunable non-uniform slicing (see constructor) -------------------------
+  phiDivAt(it) {
+    return this._phiDiv[it];
+  }
+
+  // --- tunable slicing -------------------------------------------------------
   //   r(i)     = R * (i / Rdiv)^radialExp        i(r)     = (r/R)^(1/radialExp) * Rdiv
   //   theta(i) = pi * (i / Tdiv)^thetaExp        i(theta) = (theta/pi)^(1/thetaExp) * Tdiv
   _rEdge(i) {
@@ -58,13 +77,15 @@ export class SphericalGrid {
   }
 
   pack(ir, it, ip) {
-    return (ir * this.Tdiv + it) * this.Pdiv + ip;
+    return ir * this._bandSum + this._bandOffset[it] + ip;
   }
 
   unpack(id) {
-    const ip = id % this.Pdiv;
-    const it = Math.floor(id / this.Pdiv) % this.Tdiv;
-    const ir = Math.floor(id / (this.Pdiv * this.Tdiv));
+    const ir = Math.floor(id / this._bandSum);
+    let rem = id - ir * this._bandSum;
+    let it = 0;
+    while (it + 1 < this.Tdiv && this._bandOffset[it + 1] <= rem) it++;
+    const ip = rem - this._bandOffset[it];
     return { ir, it, ip };
   }
 
@@ -83,35 +104,9 @@ export class SphericalGrid {
 
     const ir = this._rIndex(r);
     const it = this._thetaIndex(theta);
-    // the two pole bands are single cap cells (no phi split) -> no singularity
-    const ip =
-      it === 0 || it === this.Tdiv - 1
-        ? 0
-        : Math.floor((phi / (Math.PI * 2)) * this.Pdiv) % this.Pdiv;
+    const n = this._phiDiv[it];
+    const ip = Math.floor((phi / (Math.PI * 2)) * n) % n;
     return this.pack(ir, it, ip);
-  }
-
-  /** Is this cell one of the merged pole caps (top or bottom band)? */
-  isCap(id) {
-    const it = Math.floor(id / this.Pdiv) % this.Tdiv;
-    return it === 0 || it === this.Tdiv - 1;
-  }
-
-  /** Geometry params for a cap cell: radial shell, rim angle, which pole. */
-  capParams(id) {
-    const { ir, it } = this.unpack(id);
-    const top = it === 0;
-    return {
-      r0: this._rEdge(ir),
-      r1: this._rEdge(ir + 1),
-      tRim: top ? this._thetaEdge(1) : this._thetaEdge(this.Tdiv - 1),
-      top,
-    };
-  }
-
-  /** Spherical (r, theta, phi) -> world Cartesian (Vector3). Public alias. */
-  toCartesian(r, theta, phi, out = new THREE.Vector3()) {
-    return this._toCartesian(r, theta, phi, out);
   }
 
   /** Spherical (r, theta, phi) -> world Cartesian (Vector3). */
@@ -127,15 +122,17 @@ export class SphericalGrid {
   /**
    * The 8 world-space corners of a cell, ordered by the bit pattern
    * index = ri*4 + ti*2 + pi  (ri,ti,pi each 0 = low bound, 1 = high bound).
+   * Pole-band cells have a degenerate (collapsed) theta edge -> a pyramid.
    */
   cellCorners(id, out = []) {
     const { ir, it, ip } = this.unpack(id);
+    const n = this._phiDiv[it];
     const r0 = this._rEdge(ir);
     const r1 = this._rEdge(ir + 1);
     const t0 = this._thetaEdge(it);
     const t1 = this._thetaEdge(it + 1);
-    const p0 = (ip / this.Pdiv) * Math.PI * 2;
-    const p1 = ((ip + 1) / this.Pdiv) * Math.PI * 2;
+    const p0 = (ip / n) * Math.PI * 2;
+    const p1 = ((ip + 1) / n) * Math.PI * 2;
     const rs = [r0, r1];
     const ts = [t0, t1];
     const ps = [p0, p1];
@@ -152,9 +149,10 @@ export class SphericalGrid {
 
   cellCenter(id, out = new THREE.Vector3()) {
     const { ir, it, ip } = this.unpack(id);
+    const n = this._phiDiv[it];
     const r = (this._rEdge(ir) + this._rEdge(ir + 1)) * 0.5;
     const theta = (this._thetaEdge(it) + this._thetaEdge(it + 1)) * 0.5;
-    const phi = ((ip + 0.5) / this.Pdiv) * Math.PI * 2;
+    const phi = ((ip + 0.5) / n) * Math.PI * 2;
     return this._toCartesian(r, theta, phi, out);
   }
 
