@@ -78,6 +78,15 @@
       #panel .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; }
       #panel .chk input { width: 18px; height: 18px; accent-color: #33ff99; }
 
+      #sensordbg {
+        position: fixed; left: 10px; top: 60px; margin: 0; z-index: 20;
+        font: 11px/1.35 ui-monospace, Menlo, monospace; color: #8fe;
+        background: rgba(5,9,16,0.78); border: 1px solid var(--line);
+        border-radius: 8px; padding: 8px 10px; display: none; white-space: pre;
+        pointer-events: none;
+      }
+      #sensordbg.show { display: block; }
+
       /* reach slider, vertical on the right */
       #reach-wrap {
         position: fixed; right: 14px; top: 50%; transform: translateY(-50%);
@@ -157,7 +166,12 @@
         <label class="chk"><input type="checkbox" id="gyro" checked /> Gyro stabilize (fixes full-circle jumps)</label>
         <div class="hintline">If aiming feels wrong/inverted, turn this off.</div>
       </div>
+      <div class="row">
+        <label class="chk"><input type="checkbox" id="sensordbgchk" /> Show sensor data</label>
+      </div>
     </div>
+
+    <pre id="sensordbg"></pre>
 
     <div id="reach-wrap">
       <input id="reach" type="range" min="0.05" max="1.0" step="0.01" value="0.6" />

@@ -53,6 +53,11 @@ export function createAimPointer({
   let gyroActive = false; // became true once real rotationRate arrived
   let lastMotion = 0;
 
+  // diagnostics (for the in-app sensor readout)
+  const lastRate = { alpha: 0, beta: 0, gamma: 0 };
+  const lastAccel = { x: 0, y: 0, z: 0 };
+  const lastOri = { alpha: 0, beta: 0, gamma: 0 };
+
   // jump gate (shared by fallback + drift-correction trust)
   let oriInit = false;
   let rejectFrames = 0;
@@ -74,6 +79,9 @@ export function createAimPointer({
     const a = aDeg * DEG;
     const b = (e.beta || 0) * DEG;
     const g = (e.gamma || 0) * DEG;
+    lastOri.alpha = aDeg;
+    lastOri.beta = e.beta || 0;
+    lastOri.gamma = e.gamma || 0;
     euler.set(b, a, -g, "YXZ");
     absQuat.setFromEuler(euler); // physical frame (Q_FLAT applied later)
     if (!oriInit) {
@@ -94,6 +102,15 @@ export function createAimPointer({
     lastMotion = now;
     if (!(dt > 0) || dt > 0.1) dt = 0.016;
     gyroActive = true;
+    lastRate.alpha = rr.alpha || 0;
+    lastRate.beta = rr.beta || 0;
+    lastRate.gamma = rr.gamma || 0;
+    const ag = e.accelerationIncludingGravity;
+    if (ag) {
+      lastAccel.x = ag.x || 0;
+      lastAccel.y = ag.y || 0;
+      lastAccel.z = ag.z || 0;
+    }
     // W3C: rotationRate.beta=about X, gamma=about Y, alpha=about Z (deg/s)
     const wx = (rr.beta || 0) * DEG;
     const wy = (rr.gamma || 0) * DEG;
@@ -220,6 +237,9 @@ export function createAimPointer({
     },
     get rejecting() {
       return rejecting;
+    },
+    get debugInfo() {
+      return { gyroActive, mode, rate: lastRate, accel: lastAccel, ori: lastOri };
     },
     get direction() {
       return dir;

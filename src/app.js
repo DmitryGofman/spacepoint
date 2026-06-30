@@ -115,6 +115,17 @@ view.onFrame = () => {
 
   tickPress(hoverId);
   litCells.update();
+
+  if (showSensors) {
+    const d = pointer.debugInfo;
+    const f = (n) => (n >= 0 ? " " : "") + n.toFixed(1);
+    sensorDbg.textContent =
+      `gyro ${d.gyroActive ? "ON " : "off"}  mode ${d.mode}\n` +
+      `rate(deg/s) yaw α${f(d.rate.alpha)}  pitch β${f(d.rate.beta)}  roll γ${f(d.rate.gamma)}\n` +
+      `accel       x${f(d.accel.x)}  y${f(d.accel.y)}  z${f(d.accel.z)}\n` +
+      `orient(deg) α${f(d.ori.alpha)}  β${f(d.ori.beta)}  γ${f(d.ori.gamma)}\n` +
+      `beam        x${f(dir.x)}  y${f(dir.y)}  z${f(dir.z)}`;
+  }
 };
 
 // ---- HUD ------------------------------------------------------------------
@@ -227,6 +238,13 @@ glowSlider.addEventListener("input", (e) => {
   ui("glowVal").textContent = (+e.target.value).toFixed(2);
 });
 ui("gyro").addEventListener("change", (e) => pointer.setGyro(e.target.checked));
+
+const sensorDbg = ui("sensordbg");
+let showSensors = false;
+ui("sensordbgchk").addEventListener("change", (e) => {
+  showSensors = e.target.checked;
+  sensorDbg.classList.toggle("show", showSensors);
+});
 
 // ---- one-finger drag on the canvas: rotate the sphere (Drag-sphere mode) ----
 const canvasEl = ui("view");
