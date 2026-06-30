@@ -25,9 +25,9 @@ export function createAimPointer({
   origin = new THREE.Vector3(),
   aimAxis = new THREE.Vector3(0, 1, 0), // phone top edge
   invert = new THREE.Vector3(1, 1, 1),
-  smoothing = 0.25,
-  tiltGain = 0.04, // how hard gravity pulls pitch/roll back each frame
-  sensitivity = 2.5, // amplify orientation: small wrist motion -> whole sphere
+  smoothing = 0.6, // light: don't low-pass circular motion into a smaller circle
+  tiltGain = 0.05, // how hard gravity pulls pitch/roll back (only when near-still)
+  sensitivity = 1.0, // 1.0 = direct 1:1 (a phone circle traces a circle)
 } = {}) {
   const aimAxis2 = new THREE.Vector3(0, 0, 1); // screen normal (roll marker)
   const q = new THREE.Quaternion(); // fused orientation: device -> Z-up world
@@ -116,8 +116,11 @@ export function createAimPointer({
       q.multiply(dq).normalize();
     }
 
-    // 2) gravity tilt correction (absolute pitch/roll), sign auto-resolved
-    if (gMag > 4 && gMag < 14) {
+    // 2) gravity tilt correction (absolute pitch/roll), sign auto-resolved.
+    // ONLY when the phone is near-still: during active motion we trust the gyro
+    // so circular motion stays faithful (a phone circle traces a circle); when
+    // you pause, gravity re-anchors pitch/roll and kills drift.
+    if (gMag > 4 && gMag < 14 && mag < 0.7 /* rad/s (~40deg/s) */) {
       accUp.set(lastAccel.x / gMag, lastAccel.y / gMag, lastAccel.z / gMag);
       measUp.copy(accUp).applyQuaternion(q); // device-up expressed in world
       if (measUp.dot(WORLD_UP) < 0) measUp.multiplyScalar(-1); // handle accel sign
