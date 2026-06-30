@@ -27,11 +27,15 @@ export function createAimPointer({
   invert = new THREE.Vector3(1, 1, 1),
   smoothing = 0.25,
   tiltGain = 0.04, // how hard gravity pulls pitch/roll back each frame
+  sensitivity = 2.5, // amplify orientation: small wrist motion -> whole sphere
 } = {}) {
   const aimAxis2 = new THREE.Vector3(0, 0, 1); // screen normal (roll marker)
   const q = new THREE.Quaternion(); // fused orientation: device -> Z-up world
   const qOut = new THREE.Quaternion(); // smoothed output
-  const offsetInv = new THREE.Quaternion(); // recenter
+  const qRef = new THREE.Quaternion(); // orientation captured at recenter
+  const qRefInv = new THREE.Quaternion();
+  const qRel = new THREE.Quaternion(); // amplified deviation from qRef
+  const qEff = new THREE.Quaternion();
   const finalQuat = new THREE.Quaternion();
   const dq = new THREE.Quaternion();
   const corrQ = new THREE.Quaternion();
@@ -89,10 +93,12 @@ export function createAimPointer({
         // q * accUp = WORLD_UP  (minimal rotation aligning gravity to up)
         q.setFromUnitVectors(accUp, WORLD_UP);
         qOut.copy(q);
+        qRef.copy(q);
         seeded = true;
       } else if (rr) {
         seeded = true; // no accel; start from identity
         qOut.copy(q);
+        qRef.copy(q);
       }
     }
     gyroActive = true;
@@ -141,8 +147,19 @@ export function createAimPointer({
       manualYaw = 0;
       manualPitch = 0;
     } else {
-      offsetInv.copy(finalQuat).invert();
+      qRef.copy(qOut); // "forward" = wherever you point now; deviations amplify from here
     }
+  }
+
+  // scale a quaternion's rotation angle by k (shortest-arc), in-place into `out`
+  function scaleAngle(quat, k, out) {
+    let x = quat.x, y = quat.y, z = quat.z, w = quat.w;
+    if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
+    const v = Math.sqrt(x * x + y * y + z * z);
+    if (v < 1e-8) return out.set(0, 0, 0, 1);
+    const angle = 2 * Math.atan2(v, w) * k;
+    const s = Math.sin(angle / 2) / v;
+    return out.set(x * s, y * s, z * s, Math.cos(angle / 2));
   }
 
   // ---- per-frame output -----------------------------------------------------
@@ -162,14 +179,15 @@ export function createAimPointer({
     }
 
     qOut.slerp(q, smoothing); // light smoothing of the fused quaternion
-    finalQuat.copy(qOut).multiply(Q_FLAT);
-    dir
-      .copy(aimAxis)
-      .applyQuaternion(finalQuat)
-      .applyQuaternion(offsetInv)
-      .multiply(invert)
-      .normalize();
-    up.copy(aimAxis2).applyQuaternion(finalQuat).applyQuaternion(offsetInv).normalize();
+    // amplify the deviation from the recenter reference so a small physical
+    // motion sweeps the whole sphere:  qEff = scale(qOut * qRef^-1) * qRef
+    qRefInv.copy(qRef).invert();
+    qRel.copy(qOut).multiply(qRefInv);
+    scaleAngle(qRel, sensitivity, qRel);
+    qEff.copy(qRel).multiply(qRef);
+    finalQuat.copy(qEff).multiply(Q_FLAT);
+    dir.copy(aimAxis).applyQuaternion(finalQuat).multiply(invert).normalize();
+    up.copy(aimAxis2).applyQuaternion(finalQuat).normalize();
     return dir;
   }
 
@@ -186,6 +204,9 @@ export function createAimPointer({
     target,
     setSmoothing(a) {
       smoothing = a;
+    },
+    setSensitivity(k) {
+      sensitivity = k;
     },
     setGyro(on) {
       gyroEnabled = !!on;

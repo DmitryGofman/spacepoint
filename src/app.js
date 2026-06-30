@@ -236,6 +236,10 @@ glowSlider.addEventListener("input", (e) => {
   view.setBloom(+e.target.value);
   ui("glowVal").textContent = (+e.target.value).toFixed(2);
 });
+ui("sens").addEventListener("input", (e) => {
+  pointer.setSensitivity(+e.target.value);
+  ui("sensVal").textContent = (+e.target.value).toFixed(1) + "×";
+});
 ui("gyro").addEventListener("change", (e) => pointer.setGyro(e.target.checked));
 
 const sensorDbg = ui("sensordbg");
