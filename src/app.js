@@ -121,9 +121,8 @@ view.onFrame = () => {
     const f = (n) => (n >= 0 ? " " : "") + n.toFixed(1);
     sensorDbg.textContent =
       `gyro ${d.gyroActive ? "ON " : "off"}  mode ${d.mode}\n` +
-      `rate(deg/s) yaw α${f(d.rate.alpha)}  pitch β${f(d.rate.beta)}  roll γ${f(d.rate.gamma)}\n` +
+      `rate(deg/s) pitch β${f(d.rate.beta)}  roll γ${f(d.rate.gamma)}  yaw α${f(d.rate.alpha)}\n` +
       `accel       x${f(d.accel.x)}  y${f(d.accel.y)}  z${f(d.accel.z)}\n` +
-      `orient(deg) α${f(d.ori.alpha)}  β${f(d.ori.beta)}  γ${f(d.ori.gamma)}\n` +
       `beam        x${f(dir.x)}  y${f(dir.y)}  z${f(dir.z)}`;
   }
 };

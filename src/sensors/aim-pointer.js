@@ -1,138 +1,141 @@
 import * as THREE from "three";
 
-// -90deg about X: device screen-normal (+Z) -> world up (+Y); flat phone = level.
+// The filter works in a Z-up world (the device "flat on its back" frame).
+// Q_FLAT maps that to three.js Y-up at the very end, so a flat phone reads level.
 const Q_FLAT = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
 const DEG = Math.PI / 180;
+const WORLD_UP = new THREE.Vector3(0, 0, 1); // "up" inside the filter's Z-up frame
 
 /**
- * Drift-free orientation -> direction control.
+ * QUATERNION-ONLY orientation control (no Euler angles, no compass).
  *
- * Gimbal lock is the enemy: DeviceOrientation gives Euler angles (alpha/beta/
- * gamma) which TELEPORT the reconstructed direction near beta = +/-90 even when
- * the phone moved smoothly. The robust fix (what ARKit/ARCore do) is to drive
- * the orientation from the GYROSCOPE (DeviceMotion.rotationRate), which is
- * gimbal-free, and use the Euler reading only as a slow drift correction that is
- * GATED so its singularity jumps are never injected.
+ * A complementary filter fused entirely from DeviceMotion:
+ *   1. integrate the GYROSCOPE (rotationRate) into a quaternion -> smooth and
+ *      gimbal-free; a full rotation around any axis never jumps.
+ *   2. anchor pitch & roll to the ACCELEROMETER gravity vector with a small
+ *      quaternion nudge each frame -> pitch is absolute and drift-free (this is
+ *      what was missing before). The sign of gravity is auto-resolved, so the
+ *      iOS/Android accel sign difference is handled automatically.
+ * Yaw has no magnetometer (avoids compass jitter); it drifts very slowly and
+ * Recenter resets it.
  *
- *   - gyro mode (default, when DeviceMotion is available): integrate body-rate
- *     into a quaternion; gently pull toward the Euler orientation only when the
- *     two agree (no jump). Smooth through full rotations.
- *   - fallback mode: Euler quaternion + the same jump gate (hold/snap).
- *   - manual mode: setManualAim(yaw,pitch) for drag/keys.
- *
- * State quaternion `q` is the device->world orientation in the PHYSICAL device
- * frame; the rendered direction uses q * Q_FLAT.
+ * Manual mode (setManualAim) drives the beam from yaw/pitch for drag/keyboard.
  */
 export function createAimPointer({
   origin = new THREE.Vector3(),
-  aimAxis = new THREE.Vector3(0, 1, 0), // phone top edge; use (0,0,-1) for back camera
+  aimAxis = new THREE.Vector3(0, 1, 0), // phone top edge
   invert = new THREE.Vector3(1, 1, 1),
   smoothing = 0.25,
+  tiltGain = 0.04, // how hard gravity pulls pitch/roll back each frame
 } = {}) {
-  const aimAxis2 = new THREE.Vector3(0, 0, 1); // phone screen normal (roll marker)
-  const absQuat = new THREE.Quaternion(); // from Euler (physical frame, no Q_FLAT)
-  const q = new THREE.Quaternion(); // fused orientation state (physical frame)
+  const aimAxis2 = new THREE.Vector3(0, 0, 1); // screen normal (roll marker)
+  const q = new THREE.Quaternion(); // fused orientation: device -> Z-up world
+  const qOut = new THREE.Quaternion(); // smoothed output
   const offsetInv = new THREE.Quaternion(); // recenter
   const finalQuat = new THREE.Quaternion();
   const dq = new THREE.Quaternion();
+  const corrQ = new THREE.Quaternion();
   const dir = new THREE.Vector3(0, 1, 0);
   const up = new THREE.Vector3(0, 0, 1);
   const tmpUp = new THREE.Vector3();
-  const dCur = new THREE.Vector3();
-  const dAbs = new THREE.Vector3();
-  const euler = new THREE.Euler();
+  const accUp = new THREE.Vector3();
+  const measUp = new THREE.Vector3();
+  const corrAxis = new THREE.Vector3();
 
-  let heading = null;
-  let hasOrientation = false;
   let mode = "imu"; // "imu" | "manual"
   let manualYaw = 0;
   let manualPitch = 0;
 
-  // gyro fusion
   let gyroEnabled = true;
-  let gyroActive = false; // became true once real rotationRate arrived
-  let lastMotion = 0;
+  let gyroActive = false;
+  let hasOrientation = false;
+  let seeded = false;
+  let lastT = 0;
 
-  // diagnostics (for the in-app sensor readout)
   const lastRate = { alpha: 0, beta: 0, gamma: 0 };
   const lastAccel = { x: 0, y: 0, z: 0 };
-  const lastOri = { alpha: 0, beta: 0, gamma: 0 };
 
-  // jump gate (shared by fallback + drift-correction trust)
-  let oriInit = false;
-  let rejectFrames = 0;
-  let jumpGate = 0.8; // rad (~46deg) max plausible beam move between frames
-  const MAX_REJECT = 12;
-  let rejecting = false;
+  // ---- the only sensor input: DeviceMotion ---------------------------------
 
-  // ---- inputs ---------------------------------------------------------------
-
-  function onDeviceOrientation(e) {
-    if (mode !== "imu") return;
-    let aDeg = e.alpha || 0;
-    if (e.webkitCompassHeading != null) {
-      heading = e.webkitCompassHeading;
-      aDeg = 360 - heading;
-    } else if (e.absolute === true && e.alpha != null) {
-      heading = (360 - e.alpha) % 360;
-    }
-    const a = aDeg * DEG;
-    const b = (e.beta || 0) * DEG;
-    const g = (e.gamma || 0) * DEG;
-    lastOri.alpha = aDeg;
-    lastOri.beta = e.beta || 0;
-    lastOri.gamma = e.gamma || 0;
-    euler.set(b, a, -g, "YXZ");
-    absQuat.setFromEuler(euler); // physical frame (Q_FLAT applied later)
-    if (!oriInit) {
-      q.copy(absQuat);
-      oriInit = true;
-    }
-    hasOrientation = true;
-  }
-
-  /** Integrate gyroscope body rates (deg/s) into the orientation quaternion. */
   function onDeviceMotion(e) {
     if (mode !== "imu" || !gyroEnabled) return;
     const rr = e.rotationRate;
-    if (!rr || (rr.alpha == null && rr.beta == null && rr.gamma == null)) return;
-    // dt from real timestamps (e.interval's unit is unreliable across browsers).
+    const ag = e.accelerationIncludingGravity;
+    if (!rr) return;
+
     const now = performance.now();
-    let dt = lastMotion ? (now - lastMotion) / 1000 : 0.016;
-    lastMotion = now;
+    let dt = lastT ? (now - lastT) / 1000 : 0.016;
+    lastT = now;
     if (!(dt > 0) || dt > 0.1) dt = 0.016;
-    gyroActive = true;
+
     lastRate.alpha = rr.alpha || 0;
     lastRate.beta = rr.beta || 0;
     lastRate.gamma = rr.gamma || 0;
-    const ag = e.accelerationIncludingGravity;
+
+    // gravity (device frame), if present
+    let gMag = 0;
     if (ag) {
       lastAccel.x = ag.x || 0;
       lastAccel.y = ag.y || 0;
       lastAccel.z = ag.z || 0;
+      gMag = Math.hypot(lastAccel.x, lastAccel.y, lastAccel.z);
     }
-    // W3C: rotationRate.beta=about X, gamma=about Y, alpha=about Z (deg/s)
+
+    // Seed the orientation from the first gravity reading so we start level
+    // (yaw arbitrary). Falls back to identity if no accel.
+    if (!seeded) {
+      if (gMag > 4) {
+        accUp.set(lastAccel.x / gMag, lastAccel.y / gMag, lastAccel.z / gMag);
+        // q * accUp = WORLD_UP  (minimal rotation aligning gravity to up)
+        q.setFromUnitVectors(accUp, WORLD_UP);
+        qOut.copy(q);
+        seeded = true;
+      } else if (rr) {
+        seeded = true; // no accel; start from identity
+        qOut.copy(q);
+      }
+    }
+    gyroActive = true;
+    hasOrientation = true;
+
+    // 1) integrate gyro (pure quaternion). W3C body axes: beta=X, gamma=Y, alpha=Z
     const wx = (rr.beta || 0) * DEG;
     const wy = (rr.gamma || 0) * DEG;
     const wz = (rr.alpha || 0) * DEG;
     const mag = Math.sqrt(wx * wx + wy * wy + wz * wz);
-    if (mag < 1e-7) return;
-    const angle = mag * dt;
-    const s = Math.sin(angle / 2) / mag;
-    dq.set(wx * s, wy * s, wz * s, Math.cos(angle / 2));
-    q.multiply(dq).normalize(); // pure body-frame quaternion integration
+    if (mag > 1e-7) {
+      const ang = mag * dt;
+      const s = Math.sin(ang / 2) / mag;
+      dq.set(wx * s, wy * s, wz * s, Math.cos(ang / 2));
+      q.multiply(dq).normalize();
+    }
+
+    // 2) gravity tilt correction (absolute pitch/roll), sign auto-resolved
+    if (gMag > 4 && gMag < 14) {
+      accUp.set(lastAccel.x / gMag, lastAccel.y / gMag, lastAccel.z / gMag);
+      measUp.copy(accUp).applyQuaternion(q); // device-up expressed in world
+      if (measUp.dot(WORLD_UP) < 0) measUp.multiplyScalar(-1); // handle accel sign
+      corrAxis.crossVectors(measUp, WORLD_UP);
+      const sl = corrAxis.length();
+      if (sl > 1e-6) {
+        corrAxis.multiplyScalar(1 / sl);
+        const a = Math.acos(Math.min(1, Math.max(-1, measUp.dot(WORLD_UP)))) * tiltGain;
+        corrQ.setFromAxisAngle(corrAxis, a);
+        q.premultiply(corrQ).normalize(); // world-frame nudge -> only tilts pitch/roll
+      }
+    }
   }
+
+  // ---- modes / recenter -----------------------------------------------------
 
   function setManualAim(yaw, pitch) {
     mode = "manual";
     manualYaw = yaw;
     manualPitch = Math.max(-1.5533, Math.min(1.5533, pitch));
   }
-
   function setAimMode(m) {
     mode = m === "manual" ? "manual" : "imu";
   }
-
   function recenter() {
     if (mode === "manual") {
       manualYaw = 0;
@@ -142,17 +145,7 @@ export function createAimPointer({
     }
   }
 
-  // ---- per-frame update -----------------------------------------------------
-
-  function dirFrom(physQuat, out) {
-    return out
-      .copy(aimAxis)
-      .applyQuaternion(physQuat)
-      .applyQuaternion(Q_FLAT)
-      .applyQuaternion(offsetInv)
-      .multiply(invert)
-      .normalize();
-  }
+  // ---- per-frame output -----------------------------------------------------
 
   function update() {
     if (mode === "manual") {
@@ -168,42 +161,15 @@ export function createAimPointer({
       return dir;
     }
 
-    if (gyroEnabled && gyroActive) {
-      // PURE quaternion: the beam comes only from gyro-integrated body rate
-      // (no Euler/compass at all) -> gimbal lock cannot inject a jump. q is
-      // advanced in onDeviceMotion; slow drift is handled by Recenter.
-      rejecting = false;
-    } else {
-      // fallback (no gyro): follow the Euler reading but gate out its jumps
-      dirFrom(q, dCur);
-      dirFrom(absQuat, dAbs);
-      const jump = dCur.angleTo(dAbs);
-      if (jump <= jumpGate) {
-        q.slerp(absQuat, smoothing);
-        rejectFrames = 0;
-        rejecting = false;
-      } else if (rejectFrames >= MAX_REJECT) {
-        q.copy(absQuat);
-        rejectFrames = 0;
-        rejecting = false;
-      } else {
-        rejectFrames++;
-        rejecting = true;
-      }
-    }
-
-    finalQuat.copy(q).multiply(Q_FLAT);
+    qOut.slerp(q, smoothing); // light smoothing of the fused quaternion
+    finalQuat.copy(qOut).multiply(Q_FLAT);
     dir
       .copy(aimAxis)
       .applyQuaternion(finalQuat)
       .applyQuaternion(offsetInv)
       .multiply(invert)
       .normalize();
-    up
-      .copy(aimAxis2)
-      .applyQuaternion(finalQuat)
-      .applyQuaternion(offsetInv)
-      .normalize();
+    up.copy(aimAxis2).applyQuaternion(finalQuat).applyQuaternion(offsetInv).normalize();
     return dir;
   }
 
@@ -212,7 +178,6 @@ export function createAimPointer({
   }
 
   return {
-    onDeviceOrientation,
     onDeviceMotion,
     setManualAim,
     setAimMode,
@@ -222,12 +187,8 @@ export function createAimPointer({
     setSmoothing(a) {
       smoothing = a;
     },
-    setJumpGate(rad) {
-      jumpGate = rad;
-    },
     setGyro(on) {
       gyroEnabled = !!on;
-      if (!on) gyroActive = false; // resync to Euler on next frame
     },
     get gyroEnabled() {
       return gyroEnabled;
@@ -235,20 +196,14 @@ export function createAimPointer({
     get gyroActive() {
       return gyroActive;
     },
-    get rejecting() {
-      return rejecting;
-    },
     get debugInfo() {
-      return { gyroActive, mode, rate: lastRate, accel: lastAccel, ori: lastOri };
+      return { gyroActive, mode, rate: lastRate, accel: lastAccel };
     },
     get direction() {
       return dir;
     },
     get up() {
       return up;
-    },
-    get heading() {
-      return heading;
     },
     get hasOrientation() {
       return hasOrientation;
@@ -262,24 +217,20 @@ export function createAimPointer({
   };
 }
 
-/** iOS needs a user gesture + HTTPS to grant motion AND orientation. */
+/** iOS needs a user gesture + HTTPS to grant motion. */
 export async function requestOrientationPermission() {
   const reqs = [];
-  const DO = window.DeviceOrientationEvent;
   const DM = window.DeviceMotionEvent;
-  if (DO && typeof DO.requestPermission === "function") reqs.push(DO.requestPermission());
+  const DO = window.DeviceOrientationEvent;
   if (DM && typeof DM.requestPermission === "function") reqs.push(DM.requestPermission());
+  if (DO && typeof DO.requestPermission === "function") reqs.push(DO.requestPermission());
   if (reqs.length) {
     const res = await Promise.all(reqs);
-    if (res.some((r) => r !== "granted")) throw new Error("motion/orientation permission denied");
+    if (res.some((r) => r !== "granted")) throw new Error("motion permission denied");
   }
 }
 
-/** Attach to the best available orientation + motion events. */
+/** Quaternion path needs only DeviceMotion (gyro + accel). */
 export function listenOrientation(pointer) {
-  if ("ondeviceorientationabsolute" in window) {
-    window.addEventListener("deviceorientationabsolute", pointer.onDeviceOrientation);
-  }
-  window.addEventListener("deviceorientation", pointer.onDeviceOrientation);
   window.addEventListener("devicemotion", pointer.onDeviceMotion);
 }
