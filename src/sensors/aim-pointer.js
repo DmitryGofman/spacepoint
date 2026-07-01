@@ -1,141 +1,81 @@
 import * as THREE from "three";
 
-// The filter works in a Z-up world (the device "flat on its back" frame).
-// Q_FLAT maps that to three.js Y-up at the very end, so a flat phone reads level.
+// -90deg about X: device screen-normal (+Z) -> world up (+Y); flat phone = level.
 const Q_FLAT = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
 const DEG = Math.PI / 180;
-const WORLD_UP = new THREE.Vector3(0, 0, 1); // "up" inside the filter's Z-up frame
 
 /**
- * QUATERNION-ONLY orientation control (no Euler angles, no compass).
+ * Original, direct orientation control (the version that felt best):
+ *   quaternion = Euler(beta, alpha, -gamma, 'YXZ') * Q_FLAT
+ *   direction  = aimAxis rotated by that quaternion
+ * Absolute (compass-referenced) and 1:1 — a phone circle traces a circle.
  *
- * A complementary filter fused entirely from DeviceMotion:
- *   1. integrate the GYROSCOPE (rotationRate) into a quaternion -> smooth and
- *      gimbal-free; a full rotation around any axis never jumps.
- *   2. anchor pitch & roll to the ACCELEROMETER gravity vector with a small
- *      quaternion nudge each frame -> pitch is absolute and drift-free (this is
- *      what was missing before). The sign of gravity is auto-resolved, so the
- *      iOS/Android accel sign difference is handled automatically.
- * Yaw has no magnetometer (avoids compass jitter); it drifts very slowly and
- * Recenter resets it.
- *
- * Manual mode (setManualAim) drives the beam from yaw/pitch for drag/keyboard.
+ * Kept minimal. The only additions over the raw version:
+ *  - light smoothing (slerp) to take the edge off sensor jitter;
+ *  - recenter() and an optional sensitivity gain (default 1.0 = untouched);
+ *  - a TRANSPARENT continuity gate: it does nothing during normal aiming and
+ *    only holds for a few frames when the Euler reading teleports (gimbal lock),
+ *    so it can't change the feel — it just softens the rare pole jump.
+ *  - manual mode (setManualAim) for the drag-sphere / keyboard controls.
  */
 export function createAimPointer({
   origin = new THREE.Vector3(),
   aimAxis = new THREE.Vector3(0, 1, 0), // phone top edge
   invert = new THREE.Vector3(1, 1, 1),
-  smoothing = 0.6, // light: don't low-pass circular motion into a smaller circle
-  tiltGain = 0.05, // how hard gravity pulls pitch/roll back (only when near-still)
-  sensitivity = 1.0, // 1.0 = direct 1:1 (a phone circle traces a circle)
+  smoothing = 0.5,
+  sensitivity = 1.0, // 1.0 = direct 1:1
 } = {}) {
   const aimAxis2 = new THREE.Vector3(0, 0, 1); // screen normal (roll marker)
-  const q = new THREE.Quaternion(); // fused orientation: device -> Z-up world
-  const qOut = new THREE.Quaternion(); // smoothed output
-  const qRef = new THREE.Quaternion(); // orientation captured at recenter
+  const raw = new THREE.Quaternion(); // latest device orientation (incl. Q_FLAT)
+  const smooth = new THREE.Quaternion(); // smoothed
+  const qRef = new THREE.Quaternion(); // recenter reference
   const qRefInv = new THREE.Quaternion();
-  const qRel = new THREE.Quaternion(); // amplified deviation from qRef
+  const qRel = new THREE.Quaternion();
   const qEff = new THREE.Quaternion();
-  const finalQuat = new THREE.Quaternion();
-  const dq = new THREE.Quaternion();
-  const corrQ = new THREE.Quaternion();
   const dir = new THREE.Vector3(0, 1, 0);
   const up = new THREE.Vector3(0, 0, 1);
   const tmpUp = new THREE.Vector3();
-  const accUp = new THREE.Vector3();
-  const measUp = new THREE.Vector3();
-  const corrAxis = new THREE.Vector3();
+  const gCur = new THREE.Vector3();
+  const gCand = new THREE.Vector3();
+  const euler = new THREE.Euler();
 
-  let mode = "imu"; // "imu" | "manual"
+  let heading = null;
+  let hasOrientation = false;
+  let oriInit = false;
+  let mode = "imu";
   let manualYaw = 0;
   let manualPitch = 0;
+  const lastOri = { alpha: 0, beta: 0, gamma: 0 };
 
-  let gyroEnabled = true;
-  let gyroActive = false;
-  let hasOrientation = false;
-  let seeded = false;
-  let lastT = 0;
+  // transparent continuity gate
+  let rejectFrames = 0;
+  let jumpGate = 1.2; // rad (~69deg): only true teleports exceed this in a frame
+  const MAX_REJECT = 8;
 
-  const lastRate = { alpha: 0, beta: 0, gamma: 0 };
-  const lastAccel = { x: 0, y: 0, z: 0 };
-
-  // ---- the only sensor input: DeviceMotion ---------------------------------
-
-  function onDeviceMotion(e) {
-    if (mode !== "imu" || !gyroEnabled) return;
-    const rr = e.rotationRate;
-    const ag = e.accelerationIncludingGravity;
-    if (!rr) return;
-
-    const now = performance.now();
-    let dt = lastT ? (now - lastT) / 1000 : 0.016;
-    lastT = now;
-    if (!(dt > 0) || dt > 0.1) dt = 0.016;
-
-    lastRate.alpha = rr.alpha || 0;
-    lastRate.beta = rr.beta || 0;
-    lastRate.gamma = rr.gamma || 0;
-
-    // gravity (device frame), if present
-    let gMag = 0;
-    if (ag) {
-      lastAccel.x = ag.x || 0;
-      lastAccel.y = ag.y || 0;
-      lastAccel.z = ag.z || 0;
-      gMag = Math.hypot(lastAccel.x, lastAccel.y, lastAccel.z);
+  function onDeviceOrientation(e) {
+    if (mode !== "imu") return;
+    let aDeg = e.alpha || 0;
+    if (e.webkitCompassHeading != null) {
+      heading = e.webkitCompassHeading;
+      aDeg = 360 - heading;
+    } else if (e.absolute === true && e.alpha != null) {
+      heading = (360 - e.alpha) % 360;
     }
-
-    // Seed the orientation from the first gravity reading so we start level
-    // (yaw arbitrary). Falls back to identity if no accel.
-    if (!seeded) {
-      if (gMag > 4) {
-        accUp.set(lastAccel.x / gMag, lastAccel.y / gMag, lastAccel.z / gMag);
-        // q * accUp = WORLD_UP  (minimal rotation aligning gravity to up)
-        q.setFromUnitVectors(accUp, WORLD_UP);
-        qOut.copy(q);
-        qRef.copy(q);
-        seeded = true;
-      } else if (rr) {
-        seeded = true; // no accel; start from identity
-        qOut.copy(q);
-        qRef.copy(q);
-      }
+    const a = aDeg * DEG;
+    const b = (e.beta || 0) * DEG;
+    const g = (e.gamma || 0) * DEG;
+    lastOri.alpha = aDeg;
+    lastOri.beta = e.beta || 0;
+    lastOri.gamma = e.gamma || 0;
+    euler.set(b, a, -g, "YXZ");
+    raw.setFromEuler(euler).multiply(Q_FLAT);
+    if (!oriInit) {
+      smooth.copy(raw);
+      qRef.copy(raw);
+      oriInit = true;
     }
-    gyroActive = true;
     hasOrientation = true;
-
-    // 1) integrate gyro (pure quaternion). W3C body axes: beta=X, gamma=Y, alpha=Z
-    const wx = (rr.beta || 0) * DEG;
-    const wy = (rr.gamma || 0) * DEG;
-    const wz = (rr.alpha || 0) * DEG;
-    const mag = Math.sqrt(wx * wx + wy * wy + wz * wz);
-    if (mag > 1e-7) {
-      const ang = mag * dt;
-      const s = Math.sin(ang / 2) / mag;
-      dq.set(wx * s, wy * s, wz * s, Math.cos(ang / 2));
-      q.multiply(dq).normalize();
-    }
-
-    // 2) gravity tilt correction (absolute pitch/roll), sign auto-resolved.
-    // ONLY when the phone is near-still: during active motion we trust the gyro
-    // so circular motion stays faithful (a phone circle traces a circle); when
-    // you pause, gravity re-anchors pitch/roll and kills drift.
-    if (gMag > 4 && gMag < 14 && mag < 0.7 /* rad/s (~40deg/s) */) {
-      accUp.set(lastAccel.x / gMag, lastAccel.y / gMag, lastAccel.z / gMag);
-      measUp.copy(accUp).applyQuaternion(q); // device-up expressed in world
-      if (measUp.dot(WORLD_UP) < 0) measUp.multiplyScalar(-1); // handle accel sign
-      corrAxis.crossVectors(measUp, WORLD_UP);
-      const sl = corrAxis.length();
-      if (sl > 1e-6) {
-        corrAxis.multiplyScalar(1 / sl);
-        const a = Math.acos(Math.min(1, Math.max(-1, measUp.dot(WORLD_UP)))) * tiltGain;
-        corrQ.setFromAxisAngle(corrAxis, a);
-        q.premultiply(corrQ).normalize(); // world-frame nudge -> only tilts pitch/roll
-      }
-    }
   }
-
-  // ---- modes / recenter -----------------------------------------------------
 
   function setManualAim(yaw, pitch) {
     mode = "manual";
@@ -150,12 +90,13 @@ export function createAimPointer({
       manualYaw = 0;
       manualPitch = 0;
     } else {
-      qRef.copy(qOut); // "forward" = wherever you point now; deviations amplify from here
+      qRef.copy(smooth);
     }
   }
 
-  // scale a quaternion's rotation angle by k (shortest-arc), in-place into `out`
+  // scale a quaternion's rotation angle by k (shortest-arc)
   function scaleAngle(quat, k, out) {
+    if (k === 1) return out.copy(quat);
     let x = quat.x, y = quat.y, z = quat.z, w = quat.w;
     if (w < 0) { x = -x; y = -y; z = -z; w = -w; }
     const v = Math.sqrt(x * x + y * y + z * z);
@@ -164,8 +105,6 @@ export function createAimPointer({
     const s = Math.sin(angle / 2) / v;
     return out.set(x * s, y * s, z * s, Math.cos(angle / 2));
   }
-
-  // ---- per-frame output -----------------------------------------------------
 
   function update() {
     if (mode === "manual") {
@@ -181,16 +120,28 @@ export function createAimPointer({
       return dir;
     }
 
-    qOut.slerp(q, smoothing); // light smoothing of the fused quaternion
-    // amplify the deviation from the recenter reference so a small physical
-    // motion sweeps the whole sphere:  qEff = scale(qOut * qRef^-1) * qRef
+    // transparent gate: does nothing unless the reading teleports
+    gCur.copy(aimAxis).applyQuaternion(smooth).normalize();
+    gCand.copy(aimAxis).applyQuaternion(raw).normalize();
+    const jump = gCur.angleTo(gCand);
+    if (jump <= jumpGate) {
+      smooth.slerp(raw, smoothing);
+      rejectFrames = 0;
+    } else if (rejectFrames >= MAX_REJECT) {
+      smooth.copy(raw);
+      rejectFrames = 0;
+    } else {
+      rejectFrames++;
+    }
+
+    // amplify deviation from recenter (sensitivity 1.0 -> untouched)
     qRefInv.copy(qRef).invert();
-    qRel.copy(qOut).multiply(qRefInv);
+    qRel.copy(smooth).multiply(qRefInv);
     scaleAngle(qRel, sensitivity, qRel);
     qEff.copy(qRel).multiply(qRef);
-    finalQuat.copy(qEff).multiply(Q_FLAT);
-    dir.copy(aimAxis).applyQuaternion(finalQuat).multiply(invert).normalize();
-    up.copy(aimAxis2).applyQuaternion(finalQuat).normalize();
+
+    dir.copy(aimAxis).applyQuaternion(qEff).multiply(invert).normalize();
+    up.copy(aimAxis2).applyQuaternion(qEff).normalize();
     return dir;
   }
 
@@ -199,7 +150,7 @@ export function createAimPointer({
   }
 
   return {
-    onDeviceMotion,
+    onDeviceOrientation,
     setManualAim,
     setAimMode,
     recenter,
@@ -211,23 +162,20 @@ export function createAimPointer({
     setSensitivity(k) {
       sensitivity = k;
     },
-    setGyro(on) {
-      gyroEnabled = !!on;
-    },
-    get gyroEnabled() {
-      return gyroEnabled;
-    },
-    get gyroActive() {
-      return gyroActive;
+    setJumpGate(r) {
+      jumpGate = r;
     },
     get debugInfo() {
-      return { gyroActive, mode, rate: lastRate, accel: lastAccel };
+      return { mode, ori: lastOri, hasOrientation };
     },
     get direction() {
       return dir;
     },
     get up() {
       return up;
+    },
+    get heading() {
+      return heading;
     },
     get hasOrientation() {
       return hasOrientation;
@@ -241,20 +189,19 @@ export function createAimPointer({
   };
 }
 
-/** iOS needs a user gesture + HTTPS to grant motion. */
+/** iOS needs a user gesture + HTTPS to grant orientation. */
 export async function requestOrientationPermission() {
-  const reqs = [];
-  const DM = window.DeviceMotionEvent;
-  const DO = window.DeviceOrientationEvent;
-  if (DM && typeof DM.requestPermission === "function") reqs.push(DM.requestPermission());
-  if (DO && typeof DO.requestPermission === "function") reqs.push(DO.requestPermission());
-  if (reqs.length) {
-    const res = await Promise.all(reqs);
-    if (res.some((r) => r !== "granted")) throw new Error("motion permission denied");
+  const D = window.DeviceOrientationEvent;
+  if (D && typeof D.requestPermission === "function") {
+    const res = await D.requestPermission();
+    if (res !== "granted") throw new Error("orientation permission denied");
   }
 }
 
-/** Quaternion path needs only DeviceMotion (gyro + accel). */
+/** Attach to the best available orientation event (absolute preferred). */
 export function listenOrientation(pointer) {
-  window.addEventListener("devicemotion", pointer.onDeviceMotion);
+  if ("ondeviceorientationabsolute" in window) {
+    window.addEventListener("deviceorientationabsolute", pointer.onDeviceOrientation);
+  }
+  window.addEventListener("deviceorientation", pointer.onDeviceOrientation);
 }
