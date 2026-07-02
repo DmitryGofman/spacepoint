@@ -120,8 +120,8 @@ view.onFrame = () => {
     const d = pointer.debugInfo;
     const f = (n) => (n >= 0 ? " " : "") + n.toFixed(1);
     sensorDbg.textContent =
-      `orient ${d.hasOrientation ? "ON " : "off"}  mode ${d.mode}\n` +
-      `deg  α${f(d.ori.alpha)}  β${f(d.ori.beta)}  γ${f(d.ori.gamma)}\n` +
+      `gyro ${d.gyroActive ? "ON " : "off"}  orient ${d.hasOrientation ? "ON " : "off"}\n` +
+      `rate(deg/s) pitchβ${f(d.rate.beta)} rollγ${f(d.rate.gamma)} yawα${f(d.rate.alpha)}\n` +
       `beam x${f(dir.x)}  y${f(dir.y)}  z${f(dir.z)}`;
   }
 };

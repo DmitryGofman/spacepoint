@@ -1,65 +1,62 @@
 import * as THREE from "three";
 
-// -90deg about X: device screen-normal (+Z) -> world up (+Y); flat phone = level.
+// Z-up (device flat) world -> three.js Y-up at the output; flat phone = level.
 const Q_FLAT = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
 const DEG = Math.PI / 180;
 
 /**
- * Direct orientation control (the version that felt best) that ALSO never jumps.
+ * QUATERNION-ONLY orientation control that has NO poles.
  *
- * Primary = absolute DeviceOrientation: quaternion = Euler(beta,alpha,-gamma,YXZ)
- * -> the beam locks to your true, compass-referenced orientation (direct, 1:1).
+ * The orientation is integrated purely from the GYROSCOPE (DeviceMotion
+ * .rotationRate) into a quaternion. A quaternion has no gimbal lock, so the beam
+ * sails straight through "phone pointing up/down" — it never stops or locks at a
+ * pole, and a full circle stays continuous. DeviceOrientation is used only to
+ * seed a sensible starting tilt; after that it's pure gyro.
  *
- * The only failure of that path is gimbal lock: as the phone passes straight
- * up/down, the reported Euler angles teleport for a few frames. So we also
- * integrate the GYROSCOPE (DeviceMotion.rotationRate) as a gimbal-free backup:
- * every frame the beam is normally snapped to the absolute reading, but when the
- * absolute reading disagrees violently with where the gyro says we are (a
- * singularity glitch), we let the gyro carry the beam smoothly through it and
- * resume the absolute lock the instant the reading is sane again. No hold, no
- * snap -> a full circle stays continuous.
+ * Drift (the price of gyro-only) is corrected by Recenter: it re-zeros the
+ * reference so "where you point now" becomes forward.
  *
- * All quaternions here are in the PHYSICAL device frame; Q_FLAT is applied only
- * at the output.
+ * A final on-screen continuity clamp guarantees the beam can never jump more
+ * than a set angle per frame, whatever the sensors do.
  */
 export function createAimPointer({
   origin = new THREE.Vector3(),
   aimAxis = new THREE.Vector3(0, 1, 0), // phone top edge
   invert = new THREE.Vector3(1, 1, 1),
-  smoothing = 0.5, // how tightly the beam locks to the absolute reading
   sensitivity = 1.0, // 1.0 = direct 1:1
+  maxStepDeg = 18, // on-screen continuity clamp (per frame)
 } = {}) {
   const aimAxis2 = new THREE.Vector3(0, 0, 1); // screen normal (roll marker)
-  const qAbs = new THREE.Quaternion(); // absolute orientation from Euler (physical)
-  const q = new THREE.Quaternion(); // working orientation (gyro-carried + abs-locked)
-  const qRef = new THREE.Quaternion(); // recenter reference (physical)
+  const q = new THREE.Quaternion(); // gyro-integrated orientation (physical frame)
+  const qRef = new THREE.Quaternion(); // recenter reference
   const qRefInv = new THREE.Quaternion();
   const qRel = new THREE.Quaternion();
   const qEff = new THREE.Quaternion();
   const finalQuat = new THREE.Quaternion();
   const dq = new THREE.Quaternion();
-  const dir = new THREE.Vector3(0, 1, 0);
-  const up = new THREE.Vector3(0, 0, 1);
-  const tmpUp = new THREE.Vector3();
   const euler = new THREE.Euler();
+  const dir = new THREE.Vector3(0, 0, -1);
+  const desired = new THREE.Vector3(0, 0, -1);
+  const up = new THREE.Vector3(0, 1, 0);
+  const tmpUp = new THREE.Vector3();
+  const maxStep = maxStepDeg * DEG;
 
   let heading = null;
   let hasOrientation = false;
-  let oriInit = false;
   let gyroActive = false;
+  let seeded = false;
+  let havePrev = false;
   let lastMotion = 0;
   let mode = "imu";
   let manualYaw = 0;
   let manualPitch = 0;
   const lastOri = { alpha: 0, beta: 0, gamma: 0 };
-
-  let bridging = false;
-  let jumpGate = 0.9; // rad (~52deg): abs-vs-gyro disagreement that means "glitch"
+  const lastRate = { alpha: 0, beta: 0, gamma: 0 };
 
   // ---- inputs ---------------------------------------------------------------
 
+  // DeviceOrientation: only used to seed the initial tilt (once) + diagnostics.
   function onDeviceOrientation(e) {
-    if (mode !== "imu") return;
     let aDeg = e.alpha || 0;
     if (e.webkitCompassHeading != null) {
       heading = e.webkitCompassHeading;
@@ -67,23 +64,22 @@ export function createAimPointer({
     } else if (e.absolute === true && e.alpha != null) {
       heading = (360 - e.alpha) % 360;
     }
-    const a = aDeg * DEG;
-    const b = (e.beta || 0) * DEG;
-    const g = (e.gamma || 0) * DEG;
     lastOri.alpha = aDeg;
     lastOri.beta = e.beta || 0;
     lastOri.gamma = e.gamma || 0;
-    euler.set(b, a, -g, "YXZ");
-    qAbs.setFromEuler(euler); // physical (Q_FLAT applied at output)
-    if (!oriInit) {
-      q.copy(qAbs);
-      qRef.copy(qAbs);
-      oriInit = true;
-    }
     hasOrientation = true;
+    if (!seeded) {
+      const a = aDeg * DEG;
+      const b = (e.beta || 0) * DEG;
+      const g = (e.gamma || 0) * DEG;
+      euler.set(b, a, -g, "YXZ");
+      q.setFromEuler(euler);
+      qRef.copy(q);
+      seeded = true;
+    }
   }
 
-  /** Integrate gyroscope body rate into q (gimbal-free bridge). */
+  // DeviceMotion: the real driver — integrate body rate into the quaternion.
   function onDeviceMotion(e) {
     if (mode !== "imu") return;
     const rr = e.rotationRate;
@@ -92,7 +88,15 @@ export function createAimPointer({
     let dt = lastMotion ? (now - lastMotion) / 1000 : 0.016;
     lastMotion = now;
     if (!(dt > 0) || dt > 0.1) dt = 0.016;
+    if (!seeded) {
+      qRef.copy(q);
+      seeded = true;
+    }
     gyroActive = true;
+    lastRate.alpha = rr.alpha || 0;
+    lastRate.beta = rr.beta || 0;
+    lastRate.gamma = rr.gamma || 0;
+    // W3C: rotationRate.beta=about X, gamma=about Y, alpha=about Z (deg/s)
     const wx = (rr.beta || 0) * DEG;
     const wy = (rr.gamma || 0) * DEG;
     const wz = (rr.alpha || 0) * DEG;
@@ -101,7 +105,7 @@ export function createAimPointer({
     const ang = mag * dt;
     const s = Math.sin(ang / 2) / mag;
     dq.set(wx * s, wy * s, wz * s, Math.cos(ang / 2));
-    q.multiply(dq).normalize(); // body-frame integration
+    q.multiply(dq).normalize(); // pure quaternion integration — no poles
   }
 
   function setManualAim(yaw, pitch) {
@@ -117,7 +121,8 @@ export function createAimPointer({
       manualYaw = 0;
       manualPitch = 0;
     } else {
-      qRef.copy(q);
+      qRef.copy(q); // "forward" = where you point now
+      havePrev = false; // snap the beam to the new forward
     }
   }
 
@@ -135,10 +140,12 @@ export function createAimPointer({
   function update() {
     if (mode === "manual") {
       const cp = Math.cos(manualPitch);
-      dir
+      desired
         .set(Math.sin(manualYaw) * cp, Math.sin(manualPitch), Math.cos(manualYaw) * cp)
         .multiply(invert)
         .normalize();
+      dir.copy(desired);
+      havePrev = true;
       tmpUp.set(0, 1, 0);
       up.copy(tmpUp).addScaledVector(dir, -tmpUp.dot(dir));
       if (up.lengthSq() < 1e-4) up.set(0, 0, 1);
@@ -146,30 +153,25 @@ export function createAimPointer({
       return dir;
     }
 
-    // q was carried by the gyro since last frame. Lock it to the absolute
-    // reading UNLESS the two disagree violently -> that's a gimbal glitch, so
-    // let the gyro keep carrying (smooth bridge) until the reading is sane again.
-    if (oriInit) {
-      const disagree = q.angleTo(qAbs);
-      if (!gyroActive) {
-        q.slerp(qAbs, smoothing); // no gyro available: plain direct control
-        bridging = false;
-      } else if (disagree <= jumpGate) {
-        q.slerp(qAbs, smoothing); // absolute is trustworthy -> lock (direct feel)
-        bridging = false;
-      } else {
-        bridging = true; // glitch: gyro bridges, no lock this frame
-      }
+    // beam orientation = phone rotation since recenter (amplified by sensitivity).
+    // Q_FLAT is a LEFT frame-transform (Z-up world -> render Y-up); putting it on
+    // the right would make yaw rotate about the beam's own axis (beam wouldn't move).
+    qRefInv.copy(qRef).invert();
+    qRel.copy(q).multiply(qRefInv); // world-frame rotation from recenter to now
+    scaleAngle(qRel, sensitivity, qEff);
+    finalQuat.copy(Q_FLAT).multiply(qEff);
+    desired.copy(aimAxis).applyQuaternion(finalQuat).multiply(invert).normalize();
+
+    // on-screen continuity clamp: the beam can never teleport
+    if (!havePrev) {
+      dir.copy(desired);
+      havePrev = true;
+    } else {
+      const a = dir.angleTo(desired);
+      if (a > maxStep && a > 1e-6) dir.lerp(desired, maxStep / a).normalize();
+      else dir.copy(desired);
     }
 
-    // amplify deviation from recenter (sensitivity 1.0 -> untouched)
-    qRefInv.copy(qRef).invert();
-    qRel.copy(q).multiply(qRefInv);
-    scaleAngle(qRel, sensitivity, qRel);
-    qEff.copy(qRel).multiply(qRef);
-    finalQuat.copy(qEff).multiply(Q_FLAT);
-
-    dir.copy(aimAxis).applyQuaternion(finalQuat).multiply(invert).normalize();
     up.copy(aimAxis2).applyQuaternion(finalQuat).normalize();
     return dir;
   }
@@ -186,17 +188,11 @@ export function createAimPointer({
     recenter,
     update,
     target,
-    setSmoothing(a) {
-      smoothing = a;
-    },
     setSensitivity(k) {
       sensitivity = k;
     },
-    setJumpGate(r) {
-      jumpGate = r;
-    },
     get debugInfo() {
-      return { mode, ori: lastOri, hasOrientation, gyroActive, bridging };
+      return { mode, ori: lastOri, rate: lastRate, hasOrientation, gyroActive };
     },
     get direction() {
       return dir;
@@ -235,11 +231,8 @@ export async function requestOrientationPermission() {
   }
 }
 
-/** Attach to orientation (absolute preferred) + motion (gyro bridge). */
+/** Needs DeviceMotion (gyro). Orientation only seeds the initial tilt. */
 export function listenOrientation(pointer) {
-  if ("ondeviceorientationabsolute" in window) {
-    window.addEventListener("deviceorientationabsolute", pointer.onDeviceOrientation);
-  }
   window.addEventListener("deviceorientation", pointer.onDeviceOrientation);
   window.addEventListener("devicemotion", pointer.onDeviceMotion);
 }
