@@ -35,6 +35,7 @@ export function createAimPointer({
   const finalQuat = new THREE.Quaternion();
   const dq = new THREE.Quaternion();
   const euler = new THREE.Euler();
+  const absEuler = new THREE.Euler();
   const dir = new THREE.Vector3(0, 0, -1);
   const desired = new THREE.Vector3(0, 0, -1);
   const up = new THREE.Vector3(0, 1, 0);
@@ -191,8 +192,20 @@ export function createAimPointer({
     setSensitivity(k) {
       sensitivity = k;
     },
+    /** render-frame orientation of the phone (for the hologram) = Q_FLAT * qEff */
+    getOrientation(out) {
+      return out.copy(finalQuat);
+    },
     get debugInfo() {
-      return { mode, ori: lastOri, rate: lastRate, hasOrientation, gyroActive };
+      absEuler.setFromQuaternion(qEff, "YXZ");
+      return {
+        mode,
+        ori: lastOri,
+        rate: lastRate,
+        abs: { pitch: absEuler.x / DEG, yaw: absEuler.y / DEG, roll: absEuler.z / DEG },
+        hasOrientation,
+        gyroActive,
+      };
     },
     get direction() {
       return dir;

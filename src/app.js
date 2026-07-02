@@ -39,6 +39,38 @@ const cursor = createCursor(ORIGIN, MAX_REACH, PALETTE[0]);
 view.addToWorld(scaffold.object3d, litCells.object3d, hover.object3d);
 view.add(cursor.object3d);
 
+// phone-orientation hologram at the sphere center (toggle in Settings)
+const holo = new THREE.Group();
+{
+  const bodyGeo = new THREE.BoxGeometry(0.16, 0.32, 0.018);
+  holo.add(
+    new THREE.Mesh(
+      bodyGeo,
+      new THREE.MeshBasicMaterial({ color: 0x33ddff, transparent: true, opacity: 0.1, side: THREE.DoubleSide })
+    )
+  );
+  holo.add(
+    new THREE.LineSegments(
+      new THREE.EdgesGeometry(bodyGeo),
+      new THREE.LineBasicMaterial({ color: 0x7fefff, transparent: true, opacity: 0.9 })
+    )
+  );
+  const screen = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.13, 0.27),
+    new THREE.MeshBasicMaterial({ color: 0x2aa8ff, transparent: true, opacity: 0.35, side: THREE.DoubleSide })
+  );
+  screen.position.z = 0.01;
+  holo.add(screen);
+  const topMark = new THREE.Mesh(
+    new THREE.BoxGeometry(0.06, 0.025, 0.025),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  topMark.position.y = 0.16; // marks the phone's TOP edge (the aim direction)
+  holo.add(topMark);
+}
+holo.visible = false;
+view.add(holo);
+
 loadFigure(model);
 
 // ---- interaction state ----------------------------------------------------
@@ -116,12 +148,15 @@ view.onFrame = () => {
   tickPress(hoverId);
   litCells.update();
 
+  if (holo.visible) pointer.getOrientation(holo.quaternion);
+
   if (showSensors) {
     const d = pointer.debugInfo;
     const f = (n) => (n >= 0 ? " " : "") + n.toFixed(1);
     sensorDbg.textContent =
       `gyro ${d.gyroActive ? "ON " : "off"}  orient ${d.hasOrientation ? "ON " : "off"}\n` +
       `rate(deg/s) pitchβ${f(d.rate.beta)} rollγ${f(d.rate.gamma)} yawα${f(d.rate.alpha)}\n` +
+      `angle(deg)  pitch${f(d.abs.pitch)} yaw${f(d.abs.yaw)} roll${f(d.abs.roll)}\n` +
       `beam x${f(dir.x)}  y${f(dir.y)}  z${f(dir.z)}`;
   }
 };
@@ -244,6 +279,10 @@ let showSensors = false;
 ui("sensordbgchk").addEventListener("change", (e) => {
   showSensors = e.target.checked;
   sensorDbg.classList.toggle("show", showSensors);
+});
+
+ui("holochk").addEventListener("change", (e) => {
+  holo.visible = e.target.checked;
 });
 
 // ---- one-finger drag on the canvas: rotate the sphere (Drag-sphere mode) ----
