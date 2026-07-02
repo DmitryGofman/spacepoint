@@ -53,6 +53,7 @@ export function createAimPointer({
   let manualPitch = 0;
   const lastOri = { alpha: 0, beta: 0, gamma: 0 };
   const lastRate = { alpha: 0, beta: 0, gamma: 0 };
+  const gyroSign = { x: 1, y: 1, z: 1 }; // per-axis sign, flip if a rotation is inverted
 
   // ---- inputs ---------------------------------------------------------------
 
@@ -97,10 +98,12 @@ export function createAimPointer({
     lastRate.alpha = rr.alpha || 0;
     lastRate.beta = rr.beta || 0;
     lastRate.gamma = rr.gamma || 0;
-    // W3C: rotationRate.beta=about X, gamma=about Y, alpha=about Z (deg/s)
-    const wx = (rr.beta || 0) * DEG;
-    const wy = (rr.gamma || 0) * DEG;
-    const wz = (rr.alpha || 0) * DEG;
+    // Axis mapping calibrated from on-device observation (rates arrive permuted
+    // vs the W3C labelling on this hardware): pitch=alpha, roll=beta, yaw=gamma.
+    // -> integrate alpha about X, beta about Y, gamma about Z.
+    const wx = (rr.alpha || 0) * DEG * gyroSign.x;
+    const wy = (rr.beta || 0) * DEG * gyroSign.y;
+    const wz = (rr.gamma || 0) * DEG * gyroSign.z;
     const mag = Math.sqrt(wx * wx + wy * wy + wz * wz);
     if (mag < 1e-7) return;
     const ang = mag * dt;
@@ -191,6 +194,11 @@ export function createAimPointer({
     target,
     setSensitivity(k) {
       sensitivity = k;
+    },
+    setGyroSign(x, y, z) {
+      gyroSign.x = x;
+      gyroSign.y = y;
+      gyroSign.z = z;
     },
     /** render-frame orientation of the phone (for the hologram) = Q_FLAT * qEff */
     getOrientation(out) {

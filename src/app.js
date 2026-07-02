@@ -155,9 +155,10 @@ view.onFrame = () => {
     const f = (n) => (n >= 0 ? " " : "") + n.toFixed(1);
     sensorDbg.textContent =
       `gyro ${d.gyroActive ? "ON " : "off"}  orient ${d.hasOrientation ? "ON " : "off"}\n` +
-      `rate(deg/s) pitchβ${f(d.rate.beta)} rollγ${f(d.rate.gamma)} yawα${f(d.rate.alpha)}\n` +
-      `angle(deg)  pitch${f(d.abs.pitch)} yaw${f(d.abs.yaw)} roll${f(d.abs.roll)}\n` +
-      `beam x${f(dir.x)}  y${f(dir.y)}  z${f(dir.z)}`;
+      `rate  α${f(d.rate.alpha)} β${f(d.rate.beta)} γ${f(d.rate.gamma)}\n` +
+      `gyro∠ p${f(d.abs.pitch)} y${f(d.abs.yaw)} r${f(d.abs.roll)}\n` +
+      `ori∠  α${f(d.ori.alpha)} β${f(d.ori.beta)} γ${f(d.ori.gamma)}\n` +
+      `beam  x${f(dir.x)} y${f(dir.y)} z${f(dir.z)}`;
   }
 };
 
