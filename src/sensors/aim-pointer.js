@@ -54,9 +54,11 @@ export function createAimPointer({
   const lastOri = { alpha: 0, beta: 0, gamma: 0 };
   const lastRate = { alpha: 0, beta: 0, gamma: 0 };
   const gyroSign = { x: 1, y: 1, z: 1 }; // per-axis sign, flip if a rotation is inverted
-  const bias = { x: 0, y: 0, z: 0 }; // learned gyro bias (rad/s), subtracted each frame
-  const BIAS_STILL = 3.5 * DEG; // below this rate (~3.5 deg/s) treat phone as still
-  const BIAS_LEARN = 0.02; // how fast the bias estimate adapts when still
+  const bias = { x: 0, y: 0, z: 0 }; // learned gyro bias (rad/s), cancelled only when still
+  const BIAS_STILL = 2.5 * DEG; // below this rate (~2.5 deg/s) the phone is "still"
+  const BIAS_HOLD = 30; // frames of sustained stillness before learning bias (~0.5s)
+  const BIAS_LEARN = 0.03; // how fast the bias estimate adapts when still
+  let stillFrames = 0;
 
   // ---- inputs ---------------------------------------------------------------
 
@@ -108,19 +110,24 @@ export function createAimPointer({
     let wy = (rr.beta || 0) * DEG * gyroSign.y;
     let wz = (rr.gamma || 0) * DEG * gyroSign.z;
 
-    // Gyro bias removal: a real gyro reports a small non-zero rate even when
-    // still; integrating it drifts the orientation over minutes (the "acts funny
-    // after a while" symptom). While the phone is near-still, slowly learn that
-    // offset and subtract it from every reading -> no steady drift.
+    // Gyro drift control: a real gyro reports a small non-zero rate even when
+    // still; integrating it drifts over minutes. Cancel it ONLY while the phone
+    // is still (sustained low rate) -> no standstill drift. During real motion
+    // integrate the full rate untouched, so intentional yaw/pitch stays 1:1.
     const raw = Math.sqrt(wx * wx + wy * wy + wz * wz);
     if (raw < BIAS_STILL) {
-      bias.x += (wx - bias.x) * BIAS_LEARN;
-      bias.y += (wy - bias.y) * BIAS_LEARN;
-      bias.z += (wz - bias.z) * BIAS_LEARN;
+      stillFrames++;
+      if (stillFrames > BIAS_HOLD) {
+        bias.x += (wx - bias.x) * BIAS_LEARN;
+        bias.y += (wy - bias.y) * BIAS_LEARN;
+        bias.z += (wz - bias.z) * BIAS_LEARN;
+      }
+      wx -= bias.x; // subtract only when still -> hold steady
+      wy -= bias.y;
+      wz -= bias.z;
+    } else {
+      stillFrames = 0; // moving: full-fidelity, no subtraction
     }
-    wx -= bias.x;
-    wy -= bias.y;
-    wz -= bias.z;
 
     const mag = Math.sqrt(wx * wx + wy * wy + wz * wz);
     if (mag < 1e-7) return;
